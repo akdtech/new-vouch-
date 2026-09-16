@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("moderationcommands").setDescription("Show moderation features."),async execute(i){await i.reply("🛡️ Warn, warnings, kick, ban, timeout, clear and basic AutoMod.");}};

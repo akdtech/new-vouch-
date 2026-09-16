@@ -1,0 +1,1 @@
+const { SlashCommandBuilder }=require("discord.js"); module.exports={data:new SlashCommandBuilder().setName("lyrics").setDescription("Show lyrics support status."),async execute(i){await i.reply("🎤 Lyrics lookup is enabled as a feature placeholder. Add a lyrics provider API to fetch licensed lyrics.");}};

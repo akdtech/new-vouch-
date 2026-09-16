@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("musicstatus").setDescription("Show music status."),async execute(i,{music}){const p=music.getPlayer(i.guild.id);await i.reply(`🎵 Music player: **${p?"ACTIVE":"INACTIVE"}**`);}};

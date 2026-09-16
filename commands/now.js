@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("now").setDescription("Show current time."),async execute(i){await i.reply(`🕒 <t:${Math.floor(Date.now()/1000)}:F>`);}};

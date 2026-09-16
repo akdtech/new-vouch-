@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("coinflip").setDescription("Flip a coin."),async execute(i){await i.reply(Math.random()<.5?"🪙 Heads!":"🪙 Tails!");}};

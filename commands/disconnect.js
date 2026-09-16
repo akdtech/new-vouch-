@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js"); module.exports={data:new SlashCommandBuilder().setName("disconnect").setDescription("Disconnect the bot from voice."),async execute(i,{music}){await music.leave(i.guild.id);await i.reply("👋 Disconnected.");}};

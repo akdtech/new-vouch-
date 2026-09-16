@@ -1,0 +1,1 @@
+const { SlashCommandBuilder }=require("discord.js"); module.exports={data:new SlashCommandBuilder().setName("ping").setDescription("Check bot latency."),async execute(i,{client}){await i.reply(`🏓 Pong! **${client.ws.ping}ms**`);}};

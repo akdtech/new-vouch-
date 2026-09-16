@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("roleid").setDescription("Show a role ID.").addRoleOption(o=>o.setName("role").setDescription("Role").setRequired(true)),async execute(i){await i.reply(`🆔 \`${i.options.getRole("role").id}\``);}};

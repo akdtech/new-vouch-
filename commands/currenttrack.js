@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("currenttrack").setDescription("Show current track."),async execute(i,{music}){const t=music.getPlayer(i.guild.id)?.queue?.current;await i.reply(t?`🎶 **${t.title}**`:"🎵 Nothing is playing.");}};

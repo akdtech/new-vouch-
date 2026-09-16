@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("musiccommands").setDescription("Show music features."),async execute(i){await i.reply("🎵 Play, queue, pause, resume, skip, stop, volume, loop, shuffle, autoplay, seek, remove, now playing, player info and 24/7 recovery.");}};

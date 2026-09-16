@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("features").setDescription("Show major bot features."),async execute(i){await i.reply("💀 24/7 Music • Autoplay • Lavalink recovery • Queue controls • Moderation • AutoMod • Community • Diagnostics • Utilities.");}};

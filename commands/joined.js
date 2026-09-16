@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("joined").setDescription("Show when you joined the server."),async execute(i){await i.reply(`📅 You joined <t:${Math.floor((i.member.joinedTimestamp||Date.now())/1000)}:R>.`);}};

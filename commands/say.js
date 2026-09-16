@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("say").setDescription("Repeat a message.").addStringOption(o=>o.setName("message").setDescription("Text").setRequired(true)),async execute(i){await i.reply(i.options.getString("message"));}};

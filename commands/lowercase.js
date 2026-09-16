@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("lowercase").setDescription("Lowercase text.").addStringOption(o=>o.setName("text").setDescription("Text").setRequired(true)),async execute(i){await i.reply(i.options.getString("text").toLowerCase());}};

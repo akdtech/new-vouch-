@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("health").setDescription("Check bot health."),async execute(i,{client}){await i.reply(`💚 Healthy • ${client.ws.ping}ms • ${Math.round(process.memoryUsage().rss/1048576)}MB RAM`);}};

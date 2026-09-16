@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("uptime").setDescription("Show bot uptime."),async execute(i){let s=Math.floor(process.uptime()),d=Math.floor(s/86400);s%=86400;let h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);s%=60;await i.reply(`⏱️ **${d}d ${h}h ${m}m ${s}s**`);}};

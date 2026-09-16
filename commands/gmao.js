@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("gmao").setDescription("Show GMAO information."),async execute(i){await i.reply("🎮 **GMAO Gaming Community** — powered by DEATH Music 24/7.");}};

@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("modinfo").setDescription("Explain moderation permissions."),async execute(i){await i.reply("🛡️ Moderation commands use Discord permission checks.");}};

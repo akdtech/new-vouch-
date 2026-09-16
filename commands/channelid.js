@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("channelid").setDescription("Show this channel ID."),async execute(i){await i.reply(`🆔 \`${i.channel.id}\``);}};

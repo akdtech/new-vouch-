@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("memberroles").setDescription("Show your roles."),async execute(i){await i.reply(`🎭 Your roles: ${i.member.roles.cache.filter(r=>r.id!==i.guild.id).map(r=>r.name).join(", ")||"None"}`);}};

@@ -1,0 +1,1 @@
+// Command directory. Commands are loaded automatically by index.js.

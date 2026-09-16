@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("voiceinfo").setDescription("Show voice connection."),async execute(i,{music}){const p=music.getPlayer(i.guild.id);await i.reply(p?`🔊 Connected: \`${p.voiceId||"unknown"}\``:"🔇 Not connected.");}};

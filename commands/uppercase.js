@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("uppercase").setDescription("Uppercase text.").addStringOption(o=>o.setName("text").setDescription("Text").setRequired(true)),async execute(i){await i.reply(i.options.getString("text").toUpperCase());}};

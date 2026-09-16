@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("boosts").setDescription("Show server boosts."),async execute(i){await i.reply(`🚀 Boost level: **${i.guild.premiumTier}** • Boosts: **${i.guild.premiumSubscriptionCount||0}**`);}};

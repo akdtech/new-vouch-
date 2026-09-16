@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("created").setDescription("Show account creation time."),async execute(i){await i.reply(`🗓️ Your account was created <t:${Math.floor(i.user.createdTimestamp/1000)}:R>.`);}};

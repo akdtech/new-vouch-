@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("rules").setDescription("Show basic GMAO rules."),async execute(i){await i.reply("📜 Respect members • No spam/raids • No malicious links • Follow Discord and GMAO rules.");}};

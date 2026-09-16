@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("rolecount").setDescription("Count server roles."),async execute(i){await i.reply(`🎭 Roles: **${i.guild.roles.cache.size}**`);}};

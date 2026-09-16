@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("loopstatus").setDescription("Show loop status."),async execute(i,{music}){await i.reply(`🔁 Loop: **${music.getState(i.guild.id).loop}**`);}};

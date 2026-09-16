@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("userid").setDescription("Show your user ID."),async execute(i){await i.reply(`🆔 \`${i.user.id}\``);}};

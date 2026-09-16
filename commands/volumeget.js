@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("volumeget").setDescription("Show current volume."),async execute(i,{music}){await i.reply(`🔊 Volume: **${music.getPlayer(i.guild.id)?.volume||70}%**`);}};

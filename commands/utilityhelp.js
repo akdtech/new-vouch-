@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("utilityhelp").setDescription("Show utility help."),async execute(i){await i.reply("⚙️ Server/member info, diagnostics, polls, suggestions, announcements and utility tools.");}};

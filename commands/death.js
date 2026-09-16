@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("death").setDescription("Show DEATH creator information."),async execute(i){await i.reply("💀 **DEATH** — creator of DEATH Music 24/7, built for GMAO.");}};

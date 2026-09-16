@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("timestamp").setDescription("Generate a Discord timestamp."),async execute(i){await i.reply(`<t:${Math.floor(Date.now()/1000)}:F> • Unix: ${Math.floor(Date.now()/1000)}`);}};

@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("shardinfo").setDescription("Show shard information."),async execute(i,{client}){await i.reply(`🧩 Shards: **${client.ws.shards.size||1}**`);}};

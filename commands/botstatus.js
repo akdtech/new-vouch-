@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("botstatus").setDescription("Show bot status."),async execute(i,{client}){await i.reply(`🤖 DEATH Music 24/7 is **ONLINE** • ${client.ws.ping}ms`);}};

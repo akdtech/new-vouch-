@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("security").setDescription("Show security features."),async execute(i,{config}){await i.reply(`🛡️ AutoMod **${config.autoModEnabled?"ON":"OFF"}** • permission checks ON • secrets in environment variables.`);}};

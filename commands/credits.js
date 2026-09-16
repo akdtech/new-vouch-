@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("credits").setDescription("Show creator credits."),async execute(i){await i.reply("💀 **DEATH Music 24/7**\nCreated by **DEATH**\nBuilt for **GMAO Gaming Community**.");}};

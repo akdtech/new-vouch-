@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("queuecount").setDescription("Show queued track count."),async execute(i,{music}){await i.reply(`🎵 Queued: **${music.getPlayer(i.guild.id)?.queue?.length||0}**`);}};

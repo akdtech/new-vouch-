@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("version").setDescription("Show bot version."),async execute(i){await i.reply("💀 **DEATH Music 24/7 Ultimate v3.0.0**");}};

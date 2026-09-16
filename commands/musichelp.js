@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("musichelp").setDescription("Show music command help."),async execute(i){await i.reply("🎵 `/play` `/join` `/leave` `/pause` `/resume` `/skip` `/stop` `/queue` `/nowplaying` `/volume` `/loop` `/shuffle` `/autoplay` `/seek` `/remove` `/musicinfo`.");}};

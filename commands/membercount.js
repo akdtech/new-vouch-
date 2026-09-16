@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("membercount").setDescription("Show member count."),async execute(i){await i.reply(`👥 **${i.guild.memberCount}** members are in GMAO.`);}};

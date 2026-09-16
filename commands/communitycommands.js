@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("communitycommands").setDescription("Show community tools."),async execute(i){await i.reply("👥 Welcome, suggestions, polls, announcements, server/member tools and GMAO utilities.");}};
