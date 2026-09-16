@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("announceinfo").setDescription("Explain announcement permissions."),async execute(i){await i.reply("📢 `/announce` requires Manage Server.");}};

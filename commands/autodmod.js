@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("autodmod").setDescription("Show AutoMod status."),async execute(i,{config}){await i.reply(`🛡️ AutoMod: **${config.autoModEnabled?"ON":"OFF"}**`);}};

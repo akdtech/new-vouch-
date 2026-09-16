@@ -1,0 +1,1 @@
+const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("autoplaystatus").setDescription("Show autoplay status."),async execute(i,{music}){await i.reply(`♾️ Autoplay: **${music.getState(i.guild.id).autoplay?"ON":"OFF"}**`);}};
