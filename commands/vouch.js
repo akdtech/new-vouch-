@@ -7,6 +7,7 @@ const {
 const { query } = require("../db");
 
 const GMAO_PURPLE = 0x8B5CF6;
+const VOUCH_CHANNEL_ID = "1532143368623227061";
 
 function stars(value) {
   return "⭐".repeat(value) + "☆".repeat(5 - value);
@@ -194,10 +195,25 @@ module.exports = {
         })
         .setTimestamp();
 
-      return interaction.reply({
+      const vouchChannel = await interaction.guild.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
+
+      if (!vouchChannel || !vouchChannel.isTextBased()) {
+        console.error(`❌ Vouch channel ${VOUCH_CHANNEL_ID} was not found or is not text-based.`);
+        return interaction.reply({
+          content: "❌ The vouch channel is not available. Please contact an administrator.",
+          ephemeral: true
+        });
+      }
+
+      await vouchChannel.send({
         content: `💎 <@${target.id}> received a new GMAO vouch!`,
         allowedMentions: { users: [target.id] },
         embeds: [embed]
+      });
+
+      return interaction.reply({
+        content: `✅ Your vouch has been submitted and posted in <#${VOUCH_CHANNEL_ID}>.`,
+        ephemeral: true
       });
     } catch (error) {
       console.error("❌ /vouch database error:", error);
