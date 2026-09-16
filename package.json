@@ -1,10 +1,10 @@
 {
   "name": "gmao-death-discord-bot",
   "version": "3.0.0",
-  "description": "DEATH \u00d7 GMAO all-in-one Discord community bot with 24/7 music, moderation, security and utilities.",
+  "description": "DEATH × GMAO all-in-one Discord community bot with 24/7 music, moderation, security and utilities.",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node -r ./music/autoplayContextPatch.js index.js",
     "deploy": "node deploy-commands.js"
   },
   "engines": {
