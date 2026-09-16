@@ -1,0 +1,99 @@
+server:
+  port: 2333
+  address: "0.0.0.0"
+
+lavalink:
+  server:
+    password: "youshallnotpass"
+
+    sources:
+      youtube: false
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      nico: true
+      http: true
+      local: false
+
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:f45bbb7aebfcbc1c553769e04af6cd43afa8b7c3"
+      snapshot: true
+
+    - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.8.3"
+      snapshot: false
+
+plugins:
+  youtube:
+    enabled: true
+
+    remoteCipher:
+      url: "http://yt-cipher.railway.internal:8001"
+      password: "GMAO-CIPHER-2026-SECRET"
+      userAgent: "DEATH-Music-24-7"
+
+    oauth:
+      enabled: true
+      refreshToken: "1//06NukMJD7O7T5CgYIARAAGAYSNwF-L9IryGUYE3OcOg65jvU1PDeQmBllgXdUUlJXXdBO3IFokIwRuZy5h-hEniOw0Y-an_mHYIg"
+
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+
+    # IMPORTANT:
+    # Playback-capable clients first.
+    clients:
+      - WEB
+      - TV
+      - MUSIC
+
+    clientOptions:
+      WEB:
+        searching: true
+        playback: true
+        playlistLoading: true
+        videoLoading: true
+
+      TV:
+        searching: false
+        playback: true
+        playlistLoading: false
+        videoLoading: true
+
+      MUSIC:
+        searching: true
+        playback: false
+        playlistLoading: false
+        videoLoading: true
+
+  lavasrc:
+    providers:
+      - "ytmsearch:%QUERY%"
+      - "ytsearch:%QUERY%"
+      - "scsearch:%QUERY%"
+
+    sources:
+      youtube: false
+      spotify: false
+      applemusic: false
+      deezer: false
+      yandexmusic: false
+      flowerytts: false
+      vkmusic: false
+      tidal: false
+      qobuz: false
+      ytdlp: false
+      jiosaavn: false
+
+metrics:
+  prometheus:
+    enabled: false
+
+logging:
+  level:
+    root: INFO
+    lavalink: INFO
+    dev.lavalink.youtube: INFO
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
+    dev.lavalink.youtube.cipher.LocalSignatureCipherManager: INFO
+    com.github.topi314.lavasrc: INFO
