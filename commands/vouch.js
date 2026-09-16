@@ -96,22 +96,7 @@ module.exports = {
     }
 
     try {
-      const existing = await query(
-        `SELECT id FROM vouches
-         WHERE guild_discord_id = $1
-           AND voucher_discord_id = $2
-           AND vouched_discord_id = $3
-         LIMIT 1`,
-        [interaction.guildId, interaction.user.id, target.id]
-      );
-
-      if (existing.rowCount) {
-        return interaction.reply({
-          content: "⚠️ You have already vouched for this member in this server.",
-          ephemeral: true
-        });
-      }
-
+      // Users can vouch for the same member multiple times.
       const inserted = await query(
         `INSERT INTO vouches
           (voucher_discord_id, vouched_discord_id, guild_discord_id, stars, review)
@@ -200,7 +185,7 @@ module.exports = {
       if (!vouchChannel || !vouchChannel.isTextBased()) {
         console.error(`❌ Vouch channel ${VOUCH_CHANNEL_ID} was not found or is not text-based.`);
         return interaction.reply({
-          content: "❌ The vouch channel is not available. Please contact an administrator.",
+          content: "❌ The vouch was saved, but the configured vouch channel could not be found.",
           ephemeral: true
         });
       }
@@ -212,13 +197,14 @@ module.exports = {
       });
 
       return interaction.reply({
-        content: `✅ Your vouch has been submitted and posted in <#${VOUCH_CHANNEL_ID}>.`,
+        content: `✅ Your vouch for <@${target.id}> has been posted in <#${VOUCH_CHANNEL_ID}>.`,
+        allowedMentions: { users: [target.id] },
         ephemeral: true
       });
     } catch (error) {
-      console.error("❌ /vouch database error:", error);
+      console.error("❌ /vouch database/channel error:", error);
       return interaction.reply({
-        content: "❌ I couldn't save the vouch. Check the bot's PostgreSQL configuration.",
+        content: "❌ I couldn't save or post the vouch. Check the bot's PostgreSQL configuration and vouch-channel permissions.",
         ephemeral: true
       });
     }
