@@ -4,9 +4,9 @@
  * DEATH Music 24/7 runtime patch.
  *
  * Fixes:
- * 1) search results must match the user's requested song/artist;
- * 2) autoplay must follow the selected artist/search;
- * 3) concurrent 24/7 startup calls must not create duplicate players.
+ * 1) /play must not select an unrelated first YouTube result;
+ * 2) autoplay follows the selected artist/search;
+ * 3) concurrent 24/7 startup calls do not create duplicate players.
  */
 const Module = require("module");
 const originalLoad = Module._load;
@@ -53,11 +53,8 @@ function isGenericArtist(artist) {
 function artistMatches(actual, wanted) {
   const a = normalizeArtist(actual).toLowerCase();
   const w = normalizeArtist(wanted).toLowerCase();
-
   if (!a || !w) return false;
-  if (a === w) return true;
-  if (a.includes(w)) return true;
-  if (w.includes(a)) return true;
+  if (a === w || a.includes(w) || w.includes(a)) return true;
 
   const parts = a.split(/\s*(?:,|&|feat\.?|ft\.?|x)\s*/i);
   return parts.some(part => part === w || part.includes(w) || w.includes(part));
@@ -67,16 +64,16 @@ function titleLooksRelevant(title, artist) {
   const t = normalize(title);
   const a = normalize(artist);
   if (!t || !a) return false;
-
   const words = a.split(" ").filter(Boolean);
   const hits = words.filter(word => t.includes(word)).length;
   return hits >= Math.max(1, Math.ceil(words.length * 0.5));
 }
 
 const STOP_WORDS = new Set([
-  "the", "a", "an", "and", "or", "of", "to", "for", "with", "official",
-  "music", "song", "songs", "video", "audio", "lyrics", "lyric", "full",
-  "hd", "4k", "remix", "live", "version", "original"
+  "the", "a", "an", "and", "or", "of", "to", "for", "with", "it",
+  "is", "in", "on", "at", "by", "from", "official", "music", "song",
+  "songs", "video", "audio", "lyrics", "lyric", "full", "hd", "4k",
+  "remix", "live", "version", "original"
 ]);
 
 function queryTokens(query) {
@@ -90,37 +87,56 @@ function scoreTrack(track, query, manager) {
   const author = normalize(manager.getTrackAuthor(track));
   const queryNorm = normalize(query);
   const tokens = queryTokens(query);
+  const combined = `${title} ${author}`.trim();
 
   if (!title && !author) return -1000;
 
   let score = 0;
 
-  if (queryNorm && title === queryNorm) score += 100;
-  if (queryNorm && author === queryNorm) score += 90;
-  if (queryNorm && title.includes(queryNorm)) score += 60;
-  if (queryNorm && author.includes(queryNorm)) score += 80;
+  if (queryNorm && title === queryNorm) score += 1000;
+  else if (queryNorm && title.includes(queryNorm)) score += 850;
 
-  for (const token of tokens) {
-    if (author === token) score += 55;
-    else if (author.includes(token)) score += 35;
+  if (queryNorm && author === queryNorm) score += 700;
+  else if (queryNorm && author.includes(queryNorm)) score += 600;
 
-    if (title === token) score += 30;
-    else if (title.includes(token)) score += 20;
-  }
+  const titleHits = tokens.filter(token => title.includes(token)).length;
+  const authorHits = tokens.filter(token => author.includes(token)).length;
+  const combinedHits = tokens.filter(token => combined.includes(token)).length;
 
-  // If the query contains a likely artist name, matching author metadata
-  // must beat an unrelated first YouTube result.
-  if (tokens.length >= 2) {
-    const authorHits = tokens.filter(token => author.includes(token)).length;
-    const titleHits = tokens.filter(token => title.includes(token)).length;
-    score += authorHits * 25 + titleHits * 5;
-  }
+  score += titleHits * 80;
+  score += authorHits * 120;
+  score += combinedHits * 20;
 
-  if (/(shorts?|tiktok|tutorial|how to|funny|reaction|compilation)/i.test(title)) {
-    score -= 80;
+  if (tokens.length && titleHits === tokens.length) score += 500;
+  if (tokens.length && combinedHits === tokens.length) score += 350;
+
+  if (/(shorts?|tiktok|tutorial|how to|funny|reaction|compilation|podcast|lecture)/i.test(title)) {
+    score -= 250;
   }
 
   return score;
+}
+
+function isValidSearchMatch(track, query, manager) {
+  const title = normalize(manager.getTrackTitle(track));
+  const author = normalize(manager.getTrackAuthor(track));
+  const queryNorm = normalize(query);
+  const tokens = queryTokens(query);
+
+  if (!title && !author) return false;
+  if (queryNorm && (title === queryNorm || title.includes(queryNorm))) return true;
+  if (queryNorm && author.includes(queryNorm)) return true;
+
+  // For multi-word searches such as "perfect ed sheeran", allow the
+  // words to be split between title and artist metadata.
+  if (tokens.length >= 2) {
+    const titleHits = tokens.filter(token => title.includes(token)).length;
+    const authorHits = tokens.filter(token => author.includes(token)).length;
+    return titleHits + authorHits >= tokens.length;
+  }
+
+  // Single meaningful word: it must actually appear in title or artist.
+  return tokens.length === 1 && (title.includes(tokens[0]) || author.includes(tokens[0]));
 }
 
 function trackId(manager, track) {
@@ -137,21 +153,13 @@ Module._load = function(request, parent, isMain) {
   ) {
     patched = true;
 
-    // ------------------------------------------------------------
-    // Prevent concurrent 24/7 startup/recovery calls from creating
-    // multiple Kazagumo players for the same guild.
-    // ------------------------------------------------------------
     const originalEnsure247 = exported.prototype.ensure247;
 
     exported.prototype.ensure247 = async function(guildId) {
       guildId = guildId || this.musicGuildId;
-
       if (!guildId) return originalEnsure247.call(this, guildId);
 
-      if (!this._ensure247Locks) {
-        this._ensure247Locks = new Map();
-      }
-
+      if (!this._ensure247Locks) this._ensure247Locks = new Map();
       const existing = this._ensure247Locks.get(guildId);
       if (existing) return existing;
 
@@ -168,26 +176,36 @@ Module._load = function(request, parent, isMain) {
     };
 
     // ------------------------------------------------------------
-    // Replace the search selection logic so a bad first YouTube result
-    // cannot turn /play "perfect ed sheeran" into a Lil Nas X track.
+    // VALIDATED SEARCH
     // ------------------------------------------------------------
     const originalSearch = exported.prototype.search;
 
     exported.prototype.search = async function(query, requester = null) {
       query = clean(query);
+
       if (!query || this.isYouTubeUrl(query)) {
         return originalSearch.call(this, query, requester);
       }
 
-      const searches = [
-        `ytmsearch:${query}`,
-        `ytsearch:${query}`
+      // Try several forms because Lavalink/YouTube search providers can
+      // return a poor first page for a short song title.
+      const variants = [
+        query,
+        `"${query}"`,
+        `${query} song`,
+        `${query} official audio`
       ];
+
+      const identifiers = [];
+      for (const variant of variants) {
+        identifiers.push(`ytmsearch:${variant}`);
+        identifiers.push(`ytsearch:${variant}`);
+      }
 
       const allTracks = [];
       const seen = new Set();
 
-      for (const identifier of searches) {
+      for (const identifier of identifiers) {
         try {
           const result = await this.kazagumo.search(identifier, { requester });
           if (!result?.tracks?.length) continue;
@@ -208,7 +226,7 @@ Module._load = function(request, parent, isMain) {
       }
 
       if (!allTracks.length) {
-        return originalSearch.call(this, query, requester);
+        return { tracks: [], type: "SEARCH_RESULT" };
       }
 
       const ranked = allTracks
@@ -219,18 +237,24 @@ Module._load = function(request, parent, isMain) {
         }))
         .sort((a, b) => b.score - a.score || a.index - b.index);
 
-      const best = ranked[0];
+      const valid = ranked.filter(item =>
+        isValidSearchMatch(item.track, query, this)
+      );
 
-      // Only accept the validated winner when it has meaningful overlap.
-      // Otherwise preserve the existing search behavior.
-      if (!best || best.score <= 0) {
-        return originalSearch.call(this, query, requester);
+      const best = valid[0];
+
+      // IMPORTANT: never fall back to the old "first result" behavior.
+      // If YouTube/Lavalink cannot find a meaningful match, fail cleanly
+      // instead of playing a completely unrelated video.
+      if (!best) {
+        console.warn(`❌ No reliable music match for: "${query}"`);
+        return { tracks: [], type: "SEARCH_RESULT" };
       }
 
       const orderedTracks = [
         best.track,
         ...ranked
-          .slice(1)
+          .filter(item => item !== best && isValidSearchMatch(item.track, query, this))
           .map(item => item.track)
       ];
 
@@ -245,7 +269,7 @@ Module._load = function(request, parent, isMain) {
     };
 
     // ------------------------------------------------------------
-    // Remember the user's actual /play query and selected artist.
+    // REMEMBER USER SEARCH + ARTIST FOR AUTOPLAY
     // ------------------------------------------------------------
     const originalPlay = exported.prototype.play;
 
@@ -280,7 +304,7 @@ Module._load = function(request, parent, isMain) {
     };
 
     // ------------------------------------------------------------
-    // Context-aware autoplay.
+    // CONTEXT-AWARE AUTOPLAY
     // ------------------------------------------------------------
     exported.prototype.autoplayNext = async function(
       guildId,
@@ -297,9 +321,7 @@ Module._load = function(request, parent, isMain) {
         player.paused ||
         player.queue?.current ||
         (player.queue?.length || 0) > 0
-      ) {
-        return false;
-      }
+      ) return false;
 
       this.autoplayBusy.add(guildId);
       const generation = state.autoplayGeneration || 0;
@@ -310,25 +332,16 @@ Module._load = function(request, parent, isMain) {
         const artist = normalizeArtist(context.artist);
         const query = clean(context.query);
 
-        const seeds = [];
-        if (artist) {
-          seeds.push(`${artist} songs`);
-          seeds.push(artist);
-        } else if (query) {
-          seeds.push(query);
-        } else {
-          seeds.push("popular music");
-        }
+        const seeds = artist
+          ? [`${artist} songs`, artist]
+          : query
+            ? [query]
+            : ["popular music"];
 
         let chosen = null;
 
         for (const seed of seeds) {
-          const identifiers = [
-            `ytmsearch:${seed}`,
-            `ytsearch:${seed}`
-          ];
-
-          for (const identifier of identifiers) {
+          for (const identifier of [`ytmsearch:${seed}`, `ytsearch:${seed}`]) {
             try {
               const result = await this.kazagumo.search(identifier, {
                 requester: this.client.user
@@ -348,25 +361,20 @@ Module._load = function(request, parent, isMain) {
                   artistMatches(this.getTrackAuthor(track), artist)
                 );
 
-                if (metadataMatches.length) {
-                  candidates = metadataMatches;
-                } else {
+                if (metadataMatches.length) candidates = metadataMatches;
+                else {
                   const titleMatches = candidates.filter(track =>
                     titleLooksRelevant(this.getTrackTitle(track), artist)
                   );
-
-                  if (titleMatches.length) {
-                    candidates = titleMatches;
-                  } else {
-                    continue;
-                  }
+                  if (titleMatches.length) candidates = titleMatches;
+                  else continue;
                 }
               }
 
-              const sensible = candidates.filter(track => {
-                const title = this.getTrackTitle(track).toLowerCase();
-                return !/(shorts?|tiktok|tutorial|how to|funny|reaction)/i.test(title);
-              });
+              const sensible = candidates.filter(track =>
+                !/(shorts?|tiktok|tutorial|how to|funny|reaction|compilation|podcast|lecture)/i
+                  .test(this.getTrackTitle(track))
+              );
 
               if (sensible.length) candidates = sensible;
 
@@ -383,29 +391,20 @@ Module._load = function(request, parent, isMain) {
           if (chosen) break;
         }
 
-        if (!chosen || (state.autoplayGeneration || 0) !== generation) {
-          return false;
-        }
+        if (!chosen || (state.autoplayGeneration || 0) !== generation) return false;
 
         if (
           player.playing ||
           player.paused ||
           player.queue?.current ||
           (player.queue?.length || 0) > 0
-        ) {
-          return false;
-        }
+        ) return false;
 
         const id = trackId(this, chosen);
-        if (id) {
-          this.recentTracks.set(guildId, [...recent, id].slice(-20));
-        }
+        if (id) this.recentTracks.set(guildId, [...recent, id].slice(-20));
 
         player.queue.add(chosen);
-
-        if (!player.playing && !player.paused) {
-          await player.play();
-        }
+        if (!player.playing && !player.paused) await player.play();
 
         console.log(
           `🎯 Context autoplay queued: ${this.getTrackTitle(chosen)} — ${this.getTrackAuthor(chosen)}`
@@ -413,10 +412,7 @@ Module._load = function(request, parent, isMain) {
 
         return true;
       } catch (error) {
-        console.error(
-          "❌ Context autoplay error:",
-          error?.message || error
-        );
+        console.error("❌ Context autoplay error:", error?.message || error);
         return false;
       } finally {
         this.autoplayBusy.delete(guildId);
