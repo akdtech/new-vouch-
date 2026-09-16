@@ -1,1 +1,0 @@
-const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("choosecolor").setDescription("Generate a random hex color."),async execute(i){const n=Math.floor(Math.random()*0x1000000);await i.reply(`🎨 #${n.toString(16).padStart(6,"0").toUpperCase()}`);}};
