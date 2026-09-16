@@ -1,1 +1,0 @@
-const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("echo").setDescription("Echo text privately.").addStringOption(o=>o.setName("text").setDescription("Text").setRequired(true)),async execute(i){await i.reply({content:i.options.getString("text"),ephemeral:true});}};
