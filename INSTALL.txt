@@ -1,0 +1,53 @@
+DEATH Music 24/7 — GMAO FINAL BOT SERVICE
+
+1. Keep the original working Railway bot as your backup.
+2. Create/use a separate private GitHub repository for this bot service.
+3. Upload the COMPLETE contents of this folder to that repository.
+4. Connect the repository to a NEW Railway bot service.
+5. Do NOT modify, redeploy, delete, or reconnect your existing `reliable-miracle` Lavalink service.
+6. Do NOT modify, redeploy, delete, or reconnect your existing `yt-cipher` service.
+7. Set the bot Railway variables from `.env.example`.
+8. Keep your existing Lavalink connection variables:
+   LAVALINK_HOST=reliable-miracle.railway.internal
+   LAVALINK_PORT=2333
+   LAVALINK_SECURE=false
+   LAVALINK_NAME=main
+   LAVALINK_PASSWORD=<your existing password>
+9. Set:
+   MUSIC_VOICE_CHANNEL_ID=1532082737480077462
+10. Railway start command:
+   npm start
+11. The bot automatically removes old GLOBAL slash commands and registers exactly one GMAO guild command set.
+12. On startup the bot automatically joins GMAO Music and starts the 24/7 autoplay chain.
+13. Run `/musicpanel` once if you want to manually recreate the control panel. The bot also attempts to reuse an existing panel in the music channel.
+14. Run `/modrole set @YourModeratorRole` in Discord to choose who can use moderation commands.
+
+Required Discord bot permission for the music voice channel:
+- Connect
+- Speak
+- View Channel
+- Send Messages in the voice channel's text chat
+- Set Voice Channel Status
+
+
+============================================================
+GMAO VOUCH SYSTEM
+============================================================
+
+This version adds:
+- /vouch user stars review
+- /vouches user
+- /vouch-leaderboard
+- /vouch-remove id (Administrator only)
+
+The music system was not changed.
+
+PostgreSQL is required for the vouch commands. Set these environment variables:
+
+DATABASE_URL=your_postgresql_connection_string
+DATABASE_SSL=false
+
+For hosted PostgreSQL providers that require SSL, set:
+DATABASE_SSL=true
+
+The bot automatically creates the vouches table and indexes on first use.
