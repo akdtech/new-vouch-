@@ -1,1 +1,0 @@
-const {SlashCommandBuilder}=require("discord.js");module.exports={data:new SlashCommandBuilder().setName("dice").setDescription("Roll a die.").addIntegerOption(o=>o.setName("sides").setDescription("Sides").setMinValue(2).setMaxValue(100)),async execute(i){const n=i.options.getInteger("sides")||6;await i.reply(`🎲 **${1+Math.floor(Math.random()*n)} / ${n}**`);}};
