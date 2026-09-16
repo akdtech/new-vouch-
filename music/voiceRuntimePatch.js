@@ -3,13 +3,11 @@
 /*
  * DEATH Music voice runtime repair.
  *
- * Kazagumo marks a player CONNECTED immediately after sending Discord's
- * voice-state payload. That does not guarantee that Discord actually put
- * the bot in the voice channel. A stale Shoukaku player can also remain in
- * Kazagumo.players after a websocket close, causing ensure247() to report
- * "voice connected" forever without the bot actually being in the call.
+ * Kazagumo marks a player CONNECTED after sending Discord's voice-state
+ * payload. That does not guarantee Discord actually put the bot in voice.
+ * A stale Shoukaku player can also remain after a websocket close.
  *
- * This patch makes Discord's own GuildMember voice state the source of truth.
+ * Discord's own GuildMember voice state is therefore the source of truth.
  * If the bot is not actually in the configured voice channel, the stale
  * player is destroyed and a fresh player is created with retries.
  */
@@ -21,10 +19,6 @@ const previousLoad = Module._load;
 let patched = false;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-function isDestroyed(player) {
-  return !player || player.destroyed === true || player.state === "DESTROYED" || player.state === 5;
-}
 
 function channelIdFromMember(client, guildId) {
   try {
@@ -39,8 +33,7 @@ async function waitForDiscordVoice(client, guildId, channelId, timeout = 12000) 
   const started = Date.now();
 
   while (Date.now() - started < timeout) {
-    const actual = channelIdFromMember(client, guildId);
-    if (actual === channelId) return true;
+    if (channelIdFromMember(client, guildId) === channelId) return true;
     await sleep(500);
   }
 
@@ -59,12 +52,6 @@ Module._load = function(request, parent, isMain) {
 
     const MusicManager = exported;
     const originalEnsure247 = MusicManager.prototype.ensure247;
-    const originalCreatePlayer = MusicManager.prototype.createPlayer;
-
-    MusicManager.prototype.createPlayer = async function(guildId, voiceId, textId = voiceId) {
-      const player = await originalCreatePlayer.call(this, guildId, voiceId, textId);
-      return player;
-    };
 
     MusicManager.prototype.ensure247 = async function(guildId = this.musicGuildId) {
       if (!guildId || !this.musicVoiceChannelId) return null;
@@ -90,6 +77,8 @@ Module._load = function(request, parent, isMain) {
             return null;
           }
 
+          // Never trust Kazagumo's CONNECTED flag alone. Verify Discord's
+          // actual guild voice state first.
           const actualBefore = channelIdFromMember(this.client, guildId);
           if (actualBefore === targetChannelId) {
             player = this.getPlayer(guildId);
@@ -99,9 +88,11 @@ Module._load = function(request, parent, isMain) {
             }
           }
 
+          // A player object may survive a Lavalink/Shoukaku close. Remove it
+          // before trying to join again so Kazagumo sends a fresh voice state.
           const stale = this.getPlayer(guildId);
           if (stale) {
-            console.warn(`🔄 Voice repair attempt ${attempt}: removing stale player state.`);
+            console.warn(`🔄 Voice repair attempt ${attempt}: removing stale player.`);
             try { await stale.destroy(); } catch {}
             try { this.kazagumo.players.delete(guildId); } catch {}
             try { this.players.delete(guildId); } catch {}
@@ -153,30 +144,6 @@ Module._load = function(request, parent, isMain) {
       console.error(`❌ Voice repair exhausted retries for guild ${guildId}.`);
       return null;
     };
-
-    // A Shoukaku websocket close leaves a Kazagumo player object behind in
-    // some failure modes. Destroy it and let the recovery loop recreate it.
-    try {
-      this.kazagumo.on("playerClosed", async player => {
-        if (!player?.guildId) return;
-        const guildId = player.guildId;
-        if (guildId !== this.musicGuildId) return;
-
-        console.warn(`🔌 Voice player closed; scheduling verified reconnect | guild=${guildId}`);
-
-        try { await player.destroy(); } catch {}
-        try { this.kazagumo.players.delete(guildId); } catch {}
-        try { this.players.delete(guildId); } catch {}
-
-        setTimeout(() => {
-          this.ensure247(guildId).catch(error => {
-            console.error("❌ Voice reconnect after player close failed:", error?.message || error);
-          });
-        }, 2000);
-      });
-    } catch (error) {
-      console.warn("⚠️ Could not register playerClosed recovery:", error?.message || error);
-    }
 
     console.log("🛠️ DEATH voice runtime repair hooked MusicManager.");
   }
