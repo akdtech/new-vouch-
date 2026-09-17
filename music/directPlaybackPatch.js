@@ -10,10 +10,8 @@ function installDirectPlaybackPatch(DirectMusicManager) {
   if (!DirectMusicManager || DirectMusicManager.prototype.__deathDirectPlaybackPatched) return;
   DirectMusicManager.prototype.__deathDirectPlaybackPatched = true;
 
-  // Do not extract a signed googlevideo URL and hand it to a second process.
-  // YouTube can reject that hand-off with HTTP 403 on Railway/datacenter IPs.
-  // Instead yt-dlp performs the authenticated/challenge-aware HTTP download
-  // itself and streams the bytes directly into FFmpeg via stdin.
+  // Keep the YouTube stream and FFmpeg pipeline alive; do not extract a
+  // separate signed media URL that can expire/403 on Railway.
   DirectMusicManager.prototype.startTrack = async function (guildId, track, startMs = 0) {
     const state = this.getState(guildId);
     const player = this.players.get(guildId) || this.ensurePlayer(guildId);
@@ -24,10 +22,8 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     state.startedAt = Date.now();
     state.positionOffset = Math.max(0, Number(startMs || 0));
     state.paused = false;
+    state.audioResource = null;
 
-    // web_embedded avoids the normal WEB bot challenge for many public videos
-    // and does not require a user's private browser cookies. If YouTube rejects
-    // that client for a particular video, retry with the current default set.
     const clientProfiles = ["web_embedded", "default"];
     const failures = [];
 
@@ -68,19 +64,26 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           let ffStderr = "";
           let settled = false;
           let gotAudio = false;
+          let firstBytesTimer = null;
+
+          const cleanup = () => {
+            if (firstBytesTimer) clearTimeout(firstBytesTimer);
+            try { yt.stdout.unpipe(ff.stdin); } catch {}
+            try { yt.kill("SIGKILL"); } catch {}
+            try { ff.kill("SIGKILL"); } catch {}
+          };
 
           const fail = error => {
             if (settled) return;
             settled = true;
-            try { yt.stdout.unpipe(ff.stdin); } catch {}
-            try { yt.kill("SIGKILL"); } catch {}
-            try { ff.kill("SIGKILL"); } catch {}
+            cleanup();
             reject(error);
           };
 
           const success = () => {
             if (settled) return;
             settled = true;
+            if (firstBytesTimer) clearTimeout(firstBytesTimer);
             resolve({ yt, ff });
           };
 
@@ -95,6 +98,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
 
           yt.stdout.on("data", () => {
             gotAudio = true;
+            if (!settled) success();
           });
 
           yt.stdout.pipe(ff.stdin);
@@ -119,23 +123,13 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             }
           });
 
-          // Give yt-dlp/FFmpeg enough time to get the first bytes. Buffering is
-          // a valid Discord audio-player state; only a real failure rejects.
-          const timer = setTimeout(() => {
+          firstBytesTimer = setTimeout(() => {
             if (gotAudio || player.state.status === AudioPlayerStatus.Buffering || player.state.status === AudioPlayerStatus.Playing) {
               success();
             } else {
-              fail(new Error(`No audio bytes received from yt-dlp client ${client} within 12 seconds.`));
+              fail(new Error(`No audio bytes received from yt-dlp client ${client} within 8 seconds.`));
             }
-          }, 12000);
-
-          const onAudio = () => {
-            if (!settled && gotAudio) {
-              clearTimeout(timer);
-              success();
-            }
-          };
-          yt.stdout.on("data", onAudio);
+          }, 8000);
         });
 
         const { yt, ff } = result;
@@ -147,9 +141,11 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           metadata: track
         });
         resource.volume?.setVolume(Math.max(0.01, state.volume / 100));
+        state.audioResource = resource;
         player.play(resource);
 
-        await this.refreshPanel(guildId).catch(() => {});
+        // Panel refresh must never delay playback/control interactions.
+        Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
         console.log(`▶️ Direct playback started: ${track.title}`);
         console.log(`🔊 Direct audio resource status: ${player.state.status}`);
         console.log(`✅ Direct yt-dlp stream client: ${client}`);
@@ -161,6 +157,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
       }
     }
 
+    state.audioResource = null;
     state.current = null;
     state.startedAt = 0;
     state.positionOffset = 0;
