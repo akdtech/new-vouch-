@@ -22,8 +22,8 @@ lavalink:
     playerUpdateInterval: 5
 
   plugins:
-    - dependency: "dev.lavalink.youtube:youtube-plugin:f45bbb7aebfcbc1c553769e04af6cd43afa8b7c3"
-      snapshot: true
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
+      snapshot: false
 
     - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.8.3"
       snapshot: false
@@ -35,16 +35,10 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
 
-    remoteCipher:
-      url: "http://yt-cipher.railway.internal:8001"
-      password: "GMAO-CIPHER-2026-SECRET"
-      userAgent: "DEATH-Music-24-7"
-
-    # Use playback-capable clients only. MUSIC is search-only and TV
-    # requires OAuth for playback, so neither should be relied on for audio.
+    # Use current playback-capable clients. MUSIC is search-only.
     clients:
-      - ANDROID_VR
       - ANDROID_MUSIC
+      - ANDROID_VR
       - MWEB
       - WEB
       - WEBEMBEDDED
@@ -52,16 +46,16 @@ plugins:
       - MUSIC
 
     clientOptions:
-      ANDROID_VR:
-        searching: true
-        playback: true
-        playlistLoading: true
-        videoLoading: true
-
       ANDROID_MUSIC:
         searching: true
         playback: true
         playlistLoading: false
+        videoLoading: true
+
+      ANDROID_VR:
+        searching: true
+        playback: true
+        playlistLoading: true
         videoLoading: true
 
       MWEB:
@@ -122,6 +116,4 @@ logging:
     root: INFO
     lavalink: INFO
     dev.lavalink.youtube: INFO
-    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
-    dev.lavalink.youtube.cipher.LocalSignatureCipherManager: INFO
     com.github.topi314.lavasrc: INFO
