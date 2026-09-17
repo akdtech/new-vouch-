@@ -6,7 +6,8 @@ const {
   Events,
   REST,
   Routes,
-  ActivityType
+  ActivityType,
+  PermissionFlagsBits
 } = require("discord.js");
 const http = require("http");
 const fs = require("fs");
@@ -54,6 +55,39 @@ const music = new MusicManager(client, config);
 client.music = music;
 client.kazagumo = null;
 
+function resolveMusicPanelChannel(guildId, preferredChannelId = null) {
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return null;
+
+  const botMember = guild.members.me;
+  const candidates = [];
+  if (music.musicTextChannelId) candidates.push(guild.channels.cache.get(music.musicTextChannelId));
+  if (preferredChannelId) candidates.push(guild.channels.cache.get(preferredChannelId));
+
+  for (const channel of guild.channels.cache.values()) {
+    if (!channel?.isTextBased?.()) continue;
+    if (/^(music|music-247|death-music|death-music-247)$/i.test(String(channel.name || ""))) {
+      candidates.push(channel);
+    }
+  }
+
+  const seen = new Set();
+  for (const channel of candidates) {
+    if (!channel || seen.has(channel.id)) continue;
+    seen.add(channel.id);
+    const permissions = botMember ? channel.permissionsFor(botMember) : null;
+    if (!permissions) continue;
+    if (!permissions.has(PermissionFlagsBits.ViewChannel)) continue;
+    if (!permissions.has(PermissionFlagsBits.SendMessages)) continue;
+    if (!permissions.has(PermissionFlagsBits.EmbedLinks)) continue;
+    if (!permissions.has(PermissionFlagsBits.ReadMessageHistory)) continue;
+    music.musicTextChannelId = channel.id;
+    return channel;
+  }
+
+  return null;
+}
+
 client.once(Events.ClientReady, async readyClient => {
   console.log("");
   console.log("════════════════════════════════");
@@ -83,6 +117,13 @@ client.once(Events.ClientReady, async readyClient => {
   }
 
   try {
+    const panelChannel = resolveMusicPanelChannel(config.guildId);
+    if (panelChannel) {
+      console.log(`🎨 Music panel channel resolved: #${panelChannel.name} (${panelChannel.id})`);
+    } else {
+      console.warn("⚠️ No writable music text channel found. The panel will be created when a music command is used in a suitable channel.");
+    }
+
     music.startRecoveryLoop();
     await music.ensure247(config.guildId);
     console.log("♾️ Permanent GMAO Music direct-voice connection requested.");
@@ -95,6 +136,13 @@ client.on(Events.InteractionCreate, async interaction => {
   if (interaction.isChatInputCommand()) {
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
+
+    // If the bot has no configured panel channel, let a command used in the
+    // server's music channel establish the persistent panel location.
+    if (interaction.guildId === config.guildId) {
+      resolveMusicPanelChannel(interaction.guildId, interaction.channelId);
+    }
+
     try {
       await command.execute(interaction, { client, music, config, kazagumo: null });
     } catch (error) {
@@ -106,7 +154,9 @@ client.on(Events.InteractionCreate, async interaction => {
       try {
         if (interaction.replied || interaction.deferred) await interaction.editReply(response);
         else await interaction.reply(response);
-      } catch {}
+      } catch (replyError) {
+        if (replyError?.code !== 10008) console.warn("⚠️ Command error response failed:", replyError?.message || replyError);
+      }
     }
     return;
   }
@@ -120,53 +170,51 @@ client.on(Events.InteractionCreate, async interaction => {
       if (isQueue) await interaction.deferReply({ ephemeral: true });
       else await interaction.deferUpdate();
     } catch (error) {
-      console.warn("⚠️ Music button acknowledgement failed:", error?.message || error);
+      if (error?.code !== 10008) console.warn("⚠️ Music button acknowledgement failed:", error?.message || error);
       return;
     }
 
     try {
       switch (interaction.customId) {
         case "death_music_pause":
-          Promise.resolve(music.pause(guildId)).catch(error => console.warn("⚠️ Pause failed:", error?.message || error));
+          await music.pause(guildId);
           break;
         case "death_music_resume":
-          Promise.resolve(music.resume(guildId)).catch(error => console.warn("⚠️ Resume failed:", error?.message || error));
+          await music.resume(guildId);
           break;
         case "death_music_skip":
-          Promise.resolve(music.skip(guildId)).catch(error => console.warn("⚠️ Skip failed:", error?.message || error));
+          await music.skip(guildId);
           break;
         case "death_music_stop":
-          Promise.resolve(music.stop(guildId)).catch(error => console.warn("⚠️ Stop failed:", error?.message || error));
+          await music.stop(guildId);
           break;
         case "death_music_shuffle":
-          Promise.resolve(music.shuffle(guildId)).catch(error => console.warn("⚠️ Shuffle failed:", error?.message || error));
+          await music.shuffle(guildId);
           break;
         case "death_music_loop": {
           const state = music.getState(guildId);
           const next = state.loop === "none" ? "track" : state.loop === "track" ? "queue" : "none";
-          Promise.resolve(music.setLoop(guildId, next)).catch(error => console.warn("⚠️ Loop failed:", error?.message || error));
+          await music.setLoop(guildId, next);
           break;
         }
         case "death_music_vol_down": {
           const p = music.getPlayer(guildId);
-          Promise.resolve(music.setVolume(guildId, Math.max(1, Number(p?.volume || 70) - 10))).catch(error => console.warn("⚠️ Volume down failed:", error?.message || error));
+          await music.setVolume(guildId, Math.max(1, Number(p?.volume || 70) - 10));
           break;
         }
         case "death_music_vol_up": {
           const p = music.getPlayer(guildId);
-          Promise.resolve(music.setVolume(guildId, Math.min(100, Number(p?.volume || 70) + 10))).catch(error => console.warn("⚠️ Volume up failed:", error?.message || error));
+          await music.setVolume(guildId, Math.min(100, Number(p?.volume || 70) + 10));
           break;
         }
         case "death_music_autoplay": {
           const state = music.getState(guildId);
           state.autoplay = !state.autoplay;
-          Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
           if (state.autoplay && !state.current && !state.queue.length) {
             state.transitioning = true;
-            Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
-            Promise.resolve(music.autoplayNext(guildId)).catch(error => {
+            await music.autoplayNext(guildId).catch(error => {
               state.transitioning = false;
-              console.warn("⚠️ Autoplay failed:", error?.message || error);
+              throw error;
             });
           }
           break;
@@ -177,18 +225,15 @@ client.on(Events.InteractionCreate, async interaction => {
           return await interaction.editReply({ content: `📜 **DEATH Music Queue**\n${text}` });
         }
         case "death_music_refresh":
-          Promise.resolve(music.ensurePanel(guildId)).catch(() => {});
+          await music.ensurePanel(guildId);
           break;
       }
 
-      // Playback controls acknowledge with deferUpdate() only. There is no
-      // ephemeral "Music control updated" message, so the chat stays clean.
-      Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
+      await music.refreshPanel(guildId).catch(() => {});
       if (isQueue) return;
-      return;
     } catch (error) {
       console.error("❌ Music button error:", error);
-      Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
+      await music.refreshPanel(guildId).catch(() => {});
       return;
     }
   }
