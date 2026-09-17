@@ -1,4 +1,4 @@
-FROM node:24.17.0-bookworm-slim
+FROM node:24.20.0-bookworm-slim
 
 ENV NODE_ENV=production
 ENV YTDLP_PATH=/usr/local/bin/yt-dlp
@@ -22,4 +22,4 @@ COPY . .
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+CMD ["node", "index-direct.js"]
