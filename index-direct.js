@@ -119,6 +119,19 @@ client.on(Events.InteractionCreate, async interaction => {
     const guildId = interaction.guildId;
     if (!guildId) return interaction.reply({ content: "❌ Server only.", ephemeral: true });
 
+    // IMPORTANT: Discord gives a button interaction only ~3 seconds to be
+    // acknowledged. Music actions such as skip/autoplay can involve yt-dlp,
+    // FFmpeg and network/voice work that legitimately takes longer. Defer the
+    // interaction immediately so Discord never shows "didn't respond in time".
+    const isQueue = interaction.customId === "death_music_queue";
+    try {
+      if (isQueue) await interaction.deferReply({ ephemeral: true });
+      else await interaction.deferUpdate();
+    } catch (error) {
+      console.warn("⚠️ Music button acknowledgement failed:", error?.message || error);
+      return;
+    }
+
     try {
       switch (interaction.customId) {
         case "death_music_pause": await music.pause(guildId); break;
@@ -145,24 +158,34 @@ client.on(Events.InteractionCreate, async interaction => {
         case "death_music_autoplay": {
           const state = music.getState(guildId);
           state.autoplay = !state.autoplay;
-          if (state.autoplay) await music.autoplayNext(guildId).catch(() => {});
+          if (state.autoplay && !state.current && !state.queue.length) {
+            await music.autoplayNext(guildId).catch(() => {});
+          }
           break;
         }
         case "death_music_queue": {
           const queue = music.getQueue(guildId).slice(0, 15);
           const text = queue.length ? queue.map((t, i) => `${i + 1}. ${music.getTrackTitle(t)}`).join("\n") : "Nothing queued.";
-          return interaction.reply({ content: `📜 **DEATH Music Queue**\n${text}`, ephemeral: true });
+          return await interaction.editReply({ content: `📜 **DEATH Music Queue**\n${text}` });
         }
         case "death_music_refresh":
           await music.ensurePanel(guildId);
-          return interaction.reply({ content: "🔄 Music panel refreshed.", ephemeral: true });
+          return await interaction.editReply({ content: "🔄 Music panel refreshed.", ephemeral: true });
       }
 
-      await music.refreshPanel(guildId);
-      return interaction.reply({ content: "✅ Music control updated.", ephemeral: true });
+      // The button was deferred with deferUpdate(), so editReply is the
+      // acknowledgement/final response instead of reply() on an expired
+      // interaction. This also gives skip/autoplay time to finish cleanly.
+      await music.refreshPanel(guildId).catch(error => {
+        console.warn("⚠️ Music panel refresh after button:", error?.message || error);
+      });
+      return await interaction.editReply({ content: "✅ Music control updated.", ephemeral: true }).catch(() => {});
     } catch (error) {
       console.error("❌ Music button error:", error);
-      return interaction.reply({ content: `❌ ${error?.message || "Music control failed."}`, ephemeral: true }).catch(() => {});
+      return interaction.editReply({
+        content: `❌ ${error?.message || "Music control failed."}`,
+        ephemeral: true
+      }).catch(() => {});
     }
   }
 });
