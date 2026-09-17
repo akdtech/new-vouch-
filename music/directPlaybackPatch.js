@@ -7,7 +7,7 @@ const { createAudioResource, StreamType, AudioPlayerStatus } = require("@discord
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
 const POT_PROVIDER = process.env.YTDLP_POT_PROVIDER_URL || "http://bgutil-pot.railway.internal:4416";
-const STARTUP_TIMEOUT_MS = 20000;
+const STARTUP_TIMEOUT_MS = 8000;
 const PCM_BUFFER_BYTES = 1024 * 1024;
 
 function conciseError(text, max = 900) {
@@ -43,39 +43,20 @@ function installDirectPlaybackPatch(DirectMusicManager) {
       try {
         const result = await new Promise((resolve, reject) => {
           const ytArgs = [
-            "--no-warnings",
-            "--no-progress",
-            "--no-playlist",
-            "--force-ipv4",
-            "--js-runtimes", "deno",
-            "--remote-components", "ejs:github",
+            "--no-warnings", "--no-progress", "--no-playlist", "--force-ipv4",
+            "--js-runtimes", "deno", "--remote-components", "ejs:github",
             "--extractor-args", `youtube:player_client=${client};youtubepot-bgutilhttp:base_url=${POT_PROVIDER}`,
-            "--retries", "2",
-            "--fragment-retries", "2",
-            "--retry-sleep", "linear=1::2",
-            "--sleep-requests", "1",
-            "--format", "bestaudio/best",
-            "--output", "-",
-            track.url
+            "--retries", "1", "--fragment-retries", "1", "--retry-sleep", "linear=1::2",
+            "--sleep-requests", "1", "--format", "bestaudio/best", "--output", "-", track.url
           ];
 
           const yt = spawn(YTDLP, ytArgs, { stdio: ["ignore", "pipe", "pipe"] });
           const ff = spawn(FFMPEG, [
-            "-hide_banner",
-            "-loglevel", "warning",
-            "-nostdin",
-            "-i", "pipe:0",
+            "-hide_banner", "-loglevel", "warning", "-nostdin", "-i", "pipe:0",
             ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-            "-vn",
-            "-f", "s16le",
-            "-ar", "48000",
-            "-ac", "2",
-            "pipe:1"
+            "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
           ], { stdio: ["pipe", "pipe", "pipe"] });
 
-          // Keep FFmpeg PCM in a paused PassThrough until the AudioResource is
-          // attached. Reading PCM with a `data` listener here would switch the
-          // PassThrough into flowing mode and lose the startup audio.
           const pcm = new PassThrough({ highWaterMark: PCM_BUFFER_BYTES });
           ff.stdout.pipe(pcm);
 
@@ -94,14 +75,12 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             try { yt.kill("SIGKILL"); } catch {}
             try { ff.kill("SIGKILL"); } catch {}
           };
-
           const fail = error => {
             if (settled) return;
             settled = true;
             cleanup();
             reject(error);
           };
-
           const success = () => {
             if (settled) return;
             settled = true;
@@ -111,82 +90,50 @@ function installDirectPlaybackPatch(DirectMusicManager) {
 
           yt.stderr.on("data", chunk => {
             ytStderr += chunk.toString();
-            if (ytStderr.length > 12000) ytStderr = ytStderr.slice(-12000);
+            if (ytStderr.length > 10000) ytStderr = ytStderr.slice(-10000);
           });
           ff.stderr.on("data", chunk => {
             ffStderr += chunk.toString();
-            if (ffStderr.length > 12000) ffStderr = ffStderr.slice(-12000);
+            if (ffStderr.length > 10000) ffStderr = ffStderr.slice(-10000);
           });
-
-          yt.stdout.on("data", chunk => {
-            if (chunk?.length) gotYtBytes = true;
-          });
-          // Detect PCM on ff.stdout while it is being piped into the paused
-          // PassThrough. This observes the bytes without draining the buffer.
+          yt.stdout.on("data", chunk => { if (chunk?.length) gotYtBytes = true; });
           ff.stdout.on("data", chunk => {
             if (chunk?.length) {
               gotPcmBytes = true;
               if (!settled) success();
             }
           });
-
           ff.stdin.on("error", error => {
-            if (error?.code !== "EPIPE") {
-              console.warn(`⚠️ FFmpeg stdin error (${client}): ${error?.message || error}`);
-            }
+            if (error?.code !== "EPIPE") console.warn(`⚠️ FFmpeg stdin error (${client}): ${error?.message || error}`);
           });
-          yt.stdout.on("error", error => {
-            if (error?.code !== "EPIPE") fail(error);
-          });
-          ff.stdout.on("error", error => {
-            if (error?.code !== "EPIPE") fail(error);
-          });
+          yt.stdout.on("error", error => { if (error?.code !== "EPIPE") fail(error); });
+          ff.stdout.on("error", error => { if (error?.code !== "EPIPE") fail(error); });
           pcm.on("error", error => fail(error));
 
           yt.stdout.pipe(ff.stdin);
           yt.on("error", error => fail(error));
           ff.on("error", error => fail(error));
-
           yt.on("close", code => {
             if (code !== 0 && !gotYtBytes && !gotPcmBytes) {
-              const detail = conciseError(ytStderr, 1600);
-              return fail(new Error(`yt-dlp ${client} exited with code ${code}: ${detail}`.trim()));
+              return fail(new Error(`yt-dlp ${client} exited with code ${code}: ${conciseError(ytStderr, 1600)}`.trim()));
             }
-            if (code !== 0 && !gotPcmBytes) {
-              console.warn(`⚠️ yt-dlp ${client} ended with code ${code} before FFmpeg produced PCM.`);
-            }
+            if (code !== 0 && !gotPcmBytes) console.warn(`⚠️ yt-dlp ${client} ended with code ${code} before FFmpeg produced PCM.`);
           });
-
           ff.on("close", code => {
-            if (!gotPcmBytes) {
-              const detail = conciseError(ffStderr, 1200);
-              return fail(new Error(`FFmpeg ${client} exited with code ${code}: ${detail}`.trim()));
-            }
+            if (!gotPcmBytes) return fail(new Error(`FFmpeg ${client} exited with code ${code}: ${conciseError(ffStderr, 1200)}`.trim()));
           });
-
           firstBytesTimer = setTimeout(() => {
-            if (gotPcmBytes || player.state.status === AudioPlayerStatus.Buffering || player.state.status === AudioPlayerStatus.Playing) {
-              success();
-            } else {
-              const ytDetail = conciseError(ytStderr, 1400);
-              const ffDetail = conciseError(ffStderr, 600);
-              fail(new Error(`No PCM audio received from FFmpeg client ${client} within ${STARTUP_TIMEOUT_MS / 1000}s. yt-dlp=${ytDetail || "none"}; ffmpeg=${ffDetail || "none"}`));
-            }
+            if (gotPcmBytes || player.state.status === AudioPlayerStatus.Buffering || player.state.status === AudioPlayerStatus.Playing) success();
+            else fail(new Error(`No PCM audio received from FFmpeg client ${client} within ${STARTUP_TIMEOUT_MS / 1000}s. yt-dlp=${conciseError(ytStderr, 1000) || "none"}; ffmpeg=${conciseError(ffStderr, 500) || "none"}`));
           }, STARTUP_TIMEOUT_MS);
         });
 
         const { yt, ff, pcm } = result;
         this.streams.set(guildId, { yt, ff, pcm });
-
-        const resource = createAudioResource(pcm, {
-          inputType: StreamType.Raw,
-          inlineVolume: true,
-          metadata: track
-        });
+        const resource = createAudioResource(pcm, { inputType: StreamType.Raw, inlineVolume: true, metadata: track });
         resource.volume?.setVolume(Math.max(0.01, state.volume / 100));
         state.audioResource = resource;
         player.play(resource);
-
         Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
         console.log(`▶️ Direct playback started: ${track.title}`);
         console.log(`🔊 Direct audio resource status: ${player.state.status}`);
@@ -196,11 +143,8 @@ function installDirectPlaybackPatch(DirectMusicManager) {
         const message = error?.message || String(error);
         const short = conciseError(message, 1800);
         failures.push(`${client}: ${short}`);
-        if (isYoutubeBotBlock(message)) {
-          console.warn(`🚧 YouTube bot check on ${client}; trying next client.`);
-        } else {
-          console.warn(`⚠️ Direct stream client ${client} failed: ${short}`);
-        }
+        if (isYoutubeBotBlock(message)) console.warn(`🚧 YouTube bot check on ${client}; trying next client.`);
+        else console.warn(`⚠️ Direct stream client ${client} failed: ${short}`);
       }
     }
 
@@ -211,7 +155,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     throw new Error(`No playable YouTube stream was produced. ${failures.join(" || ")}`);
   };
 
-  console.log("🛠️ DEATH direct playback patch loaded: buffered PCM + resilient YouTube clients + BgUtils PO-token.");
+  console.log("🛠️ DEATH direct playback patch loaded: fast handoff + buffered PCM + resilient YouTube clients + BgUtils PO-token.");
 }
 
 try {
