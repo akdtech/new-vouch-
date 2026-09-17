@@ -44,19 +44,21 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             "--retries", "3",
             "--fragment-retries", "3",
             "--retry-sleep", "linear=1::2",
+            "--socket-timeout", "20",
             "--format", "bestaudio/best",
             "--output", "-",
             track.url
           ];
 
           const yt = spawn(YTDLP, ytArgs, { stdio: ["ignore", "pipe", "pipe"] });
+
+          // yt-dlp is already responsible for reconnect/retry behaviour.
+          // FFmpeg receives a local stdin pipe, so FFmpeg's HTTP reconnect
+          // options are invalid here (and fail on Debian FFmpeg 5.1).
           const ffArgs = [
             "-hide_banner",
             "-loglevel", "warning",
             "-nostdin",
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5",
             "-i", "pipe:0",
             ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
             "-vn",
@@ -150,15 +152,18 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             }
           });
 
+          // YouTube may intentionally sleep before delivering the selected
+          // format. Eight seconds was too aggressive for Railway; allow a
+          // normal cold start while still failing promptly on real errors.
           firstBytesTimer = setTimeout(() => {
             if (gotPcmBytes || player.state.status === AudioPlayerStatus.Buffering || player.state.status === AudioPlayerStatus.Playing) {
               success();
             } else {
               const ytDetail = ytStderr.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
               const ffDetail = ffStderr.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
-              fail(new Error(`No PCM audio received from FFmpeg client ${client} within 8 seconds. yt-dlp=${ytDetail || "none"}; ffmpeg=${ffDetail || "none"}`));
+              fail(new Error(`No PCM audio received from FFmpeg client ${client} within 20 seconds. yt-dlp=${ytDetail || "none"}; ffmpeg=${ffDetail || "none"}`));
             }
-          }, 8000);
+          }, 20000);
         });
 
         const { yt, ff } = result;
