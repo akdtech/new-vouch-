@@ -13,10 +13,6 @@ const { AudioPlayerStatus } = require("@discordjs/voice");
 if (!MusicManager.prototype.__deathFastControlsPatched) {
   MusicManager.prototype.__deathFastControlsPatched = true;
 
-  const backgroundPanel = manager => {
-    Promise.resolve(manager.refreshPanel?.(arguments[1])).catch(() => {});
-  };
-
   MusicManager.prototype.pause = async function fastPause(guildId) {
     const player = this.players.get(guildId);
     if (!player) throw new Error("Music player is not active.");
@@ -40,24 +36,43 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
 
   MusicManager.prototype.skip = async function fastSkip(guildId) {
     const state = this.getState(guildId);
-    if (!state.current) throw new Error("Nothing is playing.");
-
     const player = this.players.get(guildId);
-    const ended = state.current;
+
+    // The playback watchdog can clear state a moment before the user presses
+    // Skip. Recover the track metadata from the AudioResource so Skip still
+    // works instead of replying "Nothing is playing" while audio is buffered.
+    const resourceTrack = player?.state?.resource?.metadata;
+    const ended = state.current || resourceTrack || null;
+
+    if (!ended) {
+      const next = state.queue.shift();
+      if (next) {
+        Promise.resolve(this.startTrack(guildId, next)).catch(error =>
+          console.warn(`⚠️ Skip recovery failed: ${error?.message || error}`)
+        );
+        return;
+      }
+      if (state.autoplay && !state.intentionalLeave) {
+        Promise.resolve(this.autoplayNext(guildId)).catch(error =>
+          console.warn(`⚠️ Skip autoplay recovery failed: ${error?.message || error}`)
+        );
+        return;
+      }
+      throw new Error("Nothing is playing.");
+    }
 
     // Clear state BEFORE stop(). This prevents the player's Idle event from
-    // running a second transition while the explicit skip is already doing it.
+    // running a second transition while this explicit skip is already doing it.
     this.destroyStream(guildId);
     state.current = null;
     state.startedAt = 0;
     state.positionOffset = 0;
     state.paused = false;
+    state.audioResource = null;
     try { player?.stop(true); } catch {}
 
     const next = state.queue.shift();
     if (next) {
-      // Start immediately in the background. The Discord interaction itself
-      // can finish without waiting for yt-dlp/YouTube/FFmpeg.
       Promise.resolve(this.startTrack(guildId, next)).catch(error => {
         console.warn(`⚠️ Fast skip next track failed: ${error?.message || error}`);
         if (state.autoplay && !state.intentionalLeave) {
@@ -82,6 +97,7 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
     state.startedAt = 0;
     state.positionOffset = 0;
     state.paused = false;
+    state.audioResource = null;
     try { this.players.get(guildId)?.stop(true); } catch {}
     console.log(`⏹️ Fast stop: ${guildId}`);
     Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
@@ -107,9 +123,6 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
     const state = this.getState(guildId);
     state.volume = Math.max(1, Math.min(100, Number(level) || this.defaultVolume));
 
-    // Do NOT restart the current YouTube stream just to change volume.
-    // Restarting causes a fresh yt-dlp extraction and makes the button feel
-    // extremely slow. Keep the existing AudioResource and change its volume.
     const player = this.players.get(guildId);
     const resource = player?.state?.resource || state.audioResource;
     if (resource?.volume) {
@@ -124,10 +137,8 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
     const state = this.getState(guildId);
     if (!state.current) throw new Error("Nothing is playing.");
     const target = Math.max(0, Number(ms) || 0);
-    // Seeking necessarily restarts the source, so this remains an awaited
-    // operation unlike the lightweight controls above.
     await this.startTrack(guildId, state.current, target);
   };
 
-  console.log("⚡ DEATH fast music controls loaded: instant buttons + non-blocking transitions.");
+  console.log("⚡ DEATH fast music controls loaded: resilient skip + instant buttons.");
 }
