@@ -1,12 +1,14 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
+const { PassThrough } = require("node:stream");
 const { createAudioResource, StreamType, AudioPlayerStatus } = require("@discordjs/voice");
 
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
 const POT_PROVIDER = process.env.YTDLP_POT_PROVIDER_URL || "http://bgutil-pot.railway.internal:4416";
 const STARTUP_TIMEOUT_MS = 20000;
+const PCM_BUFFER_BYTES = 1024 * 1024;
 
 function conciseError(text, max = 900) {
   return String(text || "").replace(/\s+/g, " ").trim().slice(-max);
@@ -33,10 +35,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     state.paused = false;
     state.audioResource = null;
 
-    // Railway datacenter IPs can receive YouTube bot checks even with a PO-token
-    // provider. Try several client profiles, including web_safari/web_embedded,
-    // then fall back to the PO-token mweb client.
-    const clientProfiles = ["tv", "web_safari", "web_embedded", "mweb", "android_vr", "default"];
+    const clientProfiles = ["web_embedded", "web_safari", "tv", "mweb", "android_vr", "default"];
     const failures = [];
 
     for (const client of clientProfiles) {
@@ -61,7 +60,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           ];
 
           const yt = spawn(YTDLP, ytArgs, { stdio: ["ignore", "pipe", "pipe"] });
-          const ffArgs = [
+          const ff = spawn(FFMPEG, [
             "-hide_banner",
             "-loglevel", "warning",
             "-nostdin",
@@ -72,8 +71,14 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             "-ar", "48000",
             "-ac", "2",
             "pipe:1"
-          ];
-          const ff = spawn(FFMPEG, ffArgs, { stdio: ["pipe", "pipe", "pipe"] });
+          ], { stdio: ["pipe", "pipe", "pipe"] });
+
+          // IMPORTANT: yt-dlp/FFmpeg may produce PCM before the Discord
+          // AudioResource is attached. A PassThrough keeps those first audio
+          // bytes buffered instead of losing them, which was causing the bot
+          // to report "started" while Discord received silence.
+          const pcm = new PassThrough({ highWaterMark: PCM_BUFFER_BYTES });
+          ff.stdout.pipe(pcm);
 
           let ytStderr = "";
           let ffStderr = "";
@@ -85,6 +90,8 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           const cleanup = () => {
             if (firstBytesTimer) clearTimeout(firstBytesTimer);
             try { yt.stdout.unpipe(ff.stdin); } catch {}
+            try { ff.stdout.unpipe(pcm); } catch {}
+            try { pcm.destroy(); } catch {}
             try { yt.kill("SIGKILL"); } catch {}
             try { ff.kill("SIGKILL"); } catch {}
           };
@@ -100,7 +107,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             if (settled) return;
             settled = true;
             if (firstBytesTimer) clearTimeout(firstBytesTimer);
-            resolve({ yt, ff });
+            resolve({ yt, ff, pcm });
           };
 
           yt.stderr.on("data", chunk => {
@@ -112,10 +119,14 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             if (ffStderr.length > 12000) ffStderr = ffStderr.slice(-12000);
           });
 
-          yt.stdout.on("data", () => { gotYtBytes = true; });
-          ff.stdout.on("data", () => {
-            gotPcmBytes = true;
-            if (!settled) success();
+          yt.stdout.on("data", chunk => {
+            if (chunk?.length) gotYtBytes = true;
+          });
+          pcm.on("data", chunk => {
+            if (chunk?.length) {
+              gotPcmBytes = true;
+              if (!settled) success();
+            }
           });
 
           ff.stdin.on("error", error => {
@@ -129,6 +140,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           ff.stdout.on("error", error => {
             if (error?.code !== "EPIPE") fail(error);
           });
+          pcm.on("error", error => fail(error));
 
           yt.stdout.pipe(ff.stdin);
           yt.on("error", error => fail(error));
@@ -162,9 +174,12 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           }, STARTUP_TIMEOUT_MS);
         });
 
-        const { yt, ff } = result;
-        this.streams.set(guildId, { yt, ff });
-        const resource = createAudioResource(ff.stdout, {
+        const { yt, ff, pcm } = result;
+        this.streams.set(guildId, { yt, ff, pcm });
+
+        // The resource is created from the buffered PassThrough, not directly
+        // from ff.stdout, so no PCM is lost during the startup handshake.
+        const resource = createAudioResource(pcm, {
           inputType: StreamType.Raw,
           inlineVolume: true,
           metadata: track
@@ -172,6 +187,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
         resource.volume?.setVolume(Math.max(0.01, state.volume / 100));
         state.audioResource = resource;
         player.play(resource);
+
         Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
         console.log(`▶️ Direct playback started: ${track.title}`);
         console.log(`🔊 Direct audio resource status: ${player.state.status}`);
@@ -196,7 +212,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     throw new Error(`No playable YouTube stream was produced. ${failures.join(" || ")}`);
   };
 
-  console.log("🛠️ DEATH direct playback patch loaded: resilient YouTube clients + BgUtils PO-token + safe FFmpeg PCM pipeline.");
+  console.log("🛠️ DEATH direct playback patch loaded: buffered PCM + resilient YouTube clients + BgUtils PO-token.");
 }
 
 try {
