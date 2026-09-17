@@ -14,34 +14,61 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     const url = track?.url;
     if (!url) throw new Error("Track has no playable URL.");
 
-    return new Promise((resolve, reject) => {
-      const child = spawn(YTDLP, [
-        "--no-warnings", "--no-progress", "--no-playlist",
-        "--js-runtimes", "deno", "--remote-components", "ejs:github",
-        "--format", "bestaudio/best", "--get-url", url
-      ], { stdio: ["ignore", "pipe", "pipe"] });
-      let stdout = "", stderr = "", settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        try { child.kill("SIGKILL"); } catch {}
-        reject(new Error("yt-dlp stream URL lookup timed out."));
-      }, 45000);
-      child.stdout.on("data", c => { stdout += c.toString(); });
-      child.stderr.on("data", c => { stderr += c.toString(); });
-      child.on("error", error => {
-        if (settled) return;
-        settled = true; clearTimeout(timer); reject(error);
-      });
-      child.on("close", code => {
-        if (settled) return;
-        settled = true; clearTimeout(timer);
-        const streamUrl = stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0];
-        if (code === 0 && streamUrl) return resolve(streamUrl);
-        const detail = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-8).join(" | ");
-        reject(new Error(`yt-dlp could not resolve audio (code ${code}). ${detail}`.trim()));
-      });
-    });
+    // YouTube increasingly blocks the normal WEB client on datacenter IPs with
+    // "Sign in to confirm you're not a bot". Prefer clients that are designed
+    // to work without account cookies/PO tokens, then fall back to the normal
+    // client profile. This keeps the Railway bot independent of a user's
+    // private browser cookies.
+    const clientProfiles = [
+      "android_vr",
+      "web_embedded",
+      "tv",
+      "default"
+    ];
+    const failures = [];
+
+    for (const client of clientProfiles) {
+      try {
+        const streamUrl = await new Promise((resolve, reject) => {
+          const child = spawn(YTDLP, [
+            "--no-warnings", "--no-progress", "--no-playlist",
+            "--js-runtimes", "deno", "--remote-components", "ejs:github",
+            "--extractor-args", `youtube:player_client=${client}`,
+            "--format", "bestaudio/best", "--get-url", url
+          ], { stdio: ["ignore", "pipe", "pipe"] });
+          let stdout = "", stderr = "", settled = false;
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try { child.kill("SIGKILL"); } catch {}
+            reject(new Error("timed out"));
+          }, 20000);
+          child.stdout.on("data", c => { stdout += c.toString(); });
+          child.stderr.on("data", c => { stderr += c.toString(); });
+          child.on("error", error => {
+            if (settled) return;
+            settled = true; clearTimeout(timer); reject(error);
+          });
+          child.on("close", code => {
+            if (settled) return;
+            settled = true; clearTimeout(timer);
+            const value = stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0];
+            if (code === 0 && value) return resolve(value);
+            const detail = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-5).join(" | ");
+            reject(new Error(`code ${code}: ${detail}`.trim()));
+          });
+        });
+
+        console.log(`✅ yt-dlp resolved audio with YouTube client: ${client}`);
+        return streamUrl;
+      } catch (error) {
+        const message = error?.message || String(error);
+        failures.push(`${client}: ${message}`);
+        console.warn(`⚠️ yt-dlp client ${client} failed: ${message}`);
+      }
+    }
+
+    throw new Error(`yt-dlp could not resolve audio after YouTube client retries. ${failures.join(" || ")}`);
   };
 
   DirectMusicManager.prototype.startTrack = async function (guildId, track, startMs = 0) {
@@ -97,7 +124,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     }
   };
 
-  console.log("🛠️ DEATH direct playback patch loaded: yt-dlp URL resolution + FFmpeg reconnect stream.");
+  console.log("🛠️ DEATH direct playback patch loaded: YouTube client fallback + FFmpeg reconnect stream.");
 }
 
 try {
