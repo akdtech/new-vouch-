@@ -5,6 +5,7 @@ const MusicManager = require("./DirectMusicManager");
 const MAX_AUTOPLAY_MS = 8 * 60 * 1000;
 const IDEAL_MIN_MS = 90 * 1000;
 const IDEAL_MAX_MS = 6 * 60 * 1000;
+const AUTOPLAY_BLOCK_MS = 15 * 60 * 1000;
 const BAD_TITLE = /\b(\d+\s*(?:hour|hr)s?|hour\s*mix|\bmix\b|playlist|compilation|continuous|nonstop|radio|medley|full\s*album|album|collection|lofi\s*mix|sleep\s*music|long\s*version)\b/i;
 const STOP_WORDS = new Set(["the","a","an","and","or","of","to","for","in","on","at","with","from","is","it","my","your","me","you","official","video","audio","music","song","songs","lyrics","lyric","remix","edit","version","full","hd","4k","feat","ft"]);
 
@@ -15,10 +16,12 @@ function artistMatches(a,b){const l=clean(a).toLowerCase(),r=clean(b).toLowerCas
 function trackId(track){return track?.identifier||track?.id||track?.url;}
 function isAutoplayCandidate(track){const title=clean(track?.title),length=Number(track?.length||0);return Number.isFinite(length)&&length>0&&length<=MAX_AUTOPLAY_MS&&!BAD_TITLE.test(title);}
 function candidateScore(track,context,recent){const title=clean(track?.title),artist=clean(track?.author||track?.uploader),length=Number(track?.length||0),haystack=`${title} ${artist}`.toLowerCase();let score=0;if(artistMatches(artist,context.artist))score+=150;for(const word of context.words||[])if(haystack.includes(word))score+=20;if(length>=IDEAL_MIN_MS&&length<=IDEAL_MAX_MS)score+=25;else if(length>IDEAL_MAX_MS)score-=5;else score-=5;const id=trackId(track);if(id&&recent.includes(id))score-=1000;return score;}
+function isYoutubeBotBlock(error){const text=String(error?.message||error||"").toLowerCase();return text.includes("sign in to confirm")||text.includes("not a bot")||text.includes("login_required");}
 
 const originalPlay=MusicManager.prototype.play;
 MusicManager.prototype.play=async function patchedPlay(args){
   const result=await originalPlay.call(this,args),state=this.getState(args.guildId),track=result?.track||state.current||null,title=clean(track?.title),artist=clean(track?.author||track?.uploader),query=clean(args?.query);
+  state.autoplayBlockedUntil=0;
   state.autoplayContext={artist:artistIsUseful(artist)?artist:"",title,query,words:[...new Set([...words(title),...words(query)])].slice(0,8)};
   console.log(`🎯 Autoplay context: ${artist||"search/genre"}${title?` — ${title}`:""}`);
   return result;
@@ -28,6 +31,10 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
   const state=this.getState(guildId),player=this.players.get(guildId);
   if(!player||!state.autoplay||state.intentionalLeave||state.autoplayBusy)return false;
   if(state.current||state.queue.length)return false;
+  if(Number(state.autoplayBlockedUntil||0)>Date.now()){
+    console.warn("⏸️ Autoplay paused temporarily because YouTube is returning bot-check responses.");
+    return false;
+  }
   state.autoplayBusy=true;
   try{
     const context=state.autoplayContext||{},recent=Array.isArray(state.recent)?state.recent:[],artist=clean(context.artist),contextWords=Array.isArray(context.words)?context.words:words(`${context.title} ${context.query}`);
@@ -52,8 +59,6 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
     const id=trackId(chosen);if(id)state.recent=[...recent,id].slice(-20);
     chosen.isAutoplay=true;chosen.autoplayGroup=artist?`Same artist / related: ${artist}`:"Related search / genre";state.current=chosen;
 
-    // Chain the next search from the track we just selected. This keeps the
-    // station in the same artist/genre instead of resetting to generic music.
     const chosenArtist=clean(chosen.author||chosen.uploader);
     state.autoplayContext={
       artist:artistIsUseful(chosenArtist)?chosenArtist:artist,
@@ -65,8 +70,15 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
     await this.startTrack(guildId,chosen);
     console.log(`🎯 Short-track autoplay started: ${this.getTrackTitle(chosen)} — ${this.getTrackAuthor(chosen)} | ${chosen.autoplayGroup} | max=8m`);
     return true;
-  }catch(error){console.error("❌ Context autoplay error:",error?.message||error);state.current=null;return false;}
-  finally{state.autoplayBusy=false;}
+  }catch(error){
+    if(isYoutubeBotBlock(error)){
+      state.autoplayBlockedUntil=Date.now()+AUTOPLAY_BLOCK_MS;
+      console.warn("⏸️ YouTube bot-check detected; pausing autoplay attempts for 15 minutes to avoid hammering the Railway IP.");
+    }
+    console.error("❌ Context autoplay error:",error?.message||error);
+    state.current=null;
+    return false;
+  } finally{state.autoplayBusy=false;}
 };
 
-console.log("🎯 DEATH smart autoplay loaded: related songs + hard 8-minute maximum + artist/genre chaining.");
+console.log("🎯 DEATH smart autoplay loaded: related songs + hard 8-minute maximum + artist/genre chaining + YouTube bot-check backoff.");
