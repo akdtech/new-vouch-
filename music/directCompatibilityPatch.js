@@ -2,6 +2,13 @@
 
 const MusicManager = require("./DirectMusicManager");
 
+// index-direct.js owns the single ClientReady -> ensure247 startup path.
+// DirectMusicManager used to register a second legacy `ready` listener in its
+// constructor, which caused two simultaneous voice connections/startups and
+// could abort the autoplay startup sequence. Keep setupPlayerEvents as a
+// compatibility no-op; the recovery loop and index-direct startup handle it.
+MusicManager.prototype.setupPlayerEvents = function setupPlayerEvents() {};
+
 MusicManager.prototype.skip = async function skip(guildId) {
   const state = this.getState(guildId);
   const player = this.players.get(guildId);
