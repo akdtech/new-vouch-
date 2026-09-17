@@ -35,13 +35,13 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
 
-    # Use current playback-capable clients. MUSIC is search-only.
+    # Keep the playback clients that are currently documented as playback-capable.
+    # Avoid MWEB/WEBEMBEDDED here because the Railway logs show MWEB HTTP 403
+    # and WEB_EMBEDDED_PLAYER playback configuration failures.
     clients:
       - ANDROID_MUSIC
       - ANDROID_VR
-      - MWEB
       - WEB
-      - WEBEMBEDDED
       - IOS
       - MUSIC
 
@@ -58,22 +58,10 @@ plugins:
         playlistLoading: true
         videoLoading: true
 
-      MWEB:
-        searching: true
-        playback: true
-        playlistLoading: true
-        videoLoading: true
-
       WEB:
         searching: true
         playback: true
         playlistLoading: true
-        videoLoading: true
-
-      WEBEMBEDDED:
-        searching: false
-        playback: true
-        playlistLoading: false
         videoLoading: true
 
       IOS:
