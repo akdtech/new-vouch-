@@ -27,3 +27,13 @@ MusicManager.prototype.skip = async function skip(guildId) {
 
   await this.refreshPanel(guildId).catch(() => {});
 };
+
+const originalReconnect = MusicManager.prototype.reconnect;
+MusicManager.prototype.reconnect = async function reconnect(guildId, voiceId) {
+  await originalReconnect.call(this, guildId, voiceId);
+  const connection = this.connections.get(guildId);
+  const player = this.players.get(guildId);
+  if (connection && player) {
+    try { connection.subscribe(player); } catch {}
+  }
+};
