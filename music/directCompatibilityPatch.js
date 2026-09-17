@@ -1,6 +1,8 @@
 "use strict";
 
 const MusicManager = require("./DirectMusicManager");
+const PATCH_STARTED_AT = Date.now();
+const STARTUP_GRACE_MS = 30000;
 
 // index-direct.js owns the single ClientReady -> ensure247 startup path.
 MusicManager.prototype.setupPlayerEvents = function setupPlayerEvents() {};
@@ -36,12 +38,13 @@ MusicManager.prototype.reconnect = async function reconnect(guildId, voiceId) {
   }
 };
 
-// Ignore stale READY/VOICE_STATE events from the previous container during a
-// Railway restart. A real move/disconnect is only actionable after this
-// process has an active connection registered for the guild.
+// Railway restarts can emit a stale VoiceStateUpdate from the previous
+// container. Ignore voice-state recovery during the first 30 seconds so it
+// cannot abort the fresh 24/7 connection before startup music begins.
 MusicManager.prototype.handleVoiceStateUpdate = async function handleVoiceStateUpdate(oldState, newState) {
   if (newState.guild?.id !== this.musicGuildId) return;
   if (newState.id !== this.client.user?.id) return;
+  if (Date.now() - PATCH_STARTED_AT < STARTUP_GRACE_MS) return;
 
   const guildId = newState.guild.id;
   const state = this.getState(guildId);
