@@ -41,11 +41,8 @@ for (const file of commandFiles) {
   try {
     const command = require(path.join(commandsPath, file));
     if (command.data && command.execute) {
-      if (client.commands.has(command.data.name)) {
-        console.error(`❌ Duplicate command: /${command.data.name}`);
-      } else {
-        client.commands.set(command.data.name, command);
-      }
+      if (client.commands.has(command.data.name)) console.error(`❌ Duplicate command: /${command.data.name}`);
+      else client.commands.set(command.data.name, command);
     }
   } catch (error) {
     console.error(`❌ Failed loading ${file}:`, error);
@@ -73,7 +70,6 @@ client.once(Events.ClientReady, async readyClient => {
   try {
     const commands = [...client.commands.values()].map(command => command.data.toJSON());
     const rest = new REST({ version: "10" }).setToken(config.token);
-
     await rest.put(Routes.applicationCommands(config.clientId), { body: [] });
     if (config.guildId) {
       await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), { body: commands });
@@ -119,10 +115,6 @@ client.on(Events.InteractionCreate, async interaction => {
     const guildId = interaction.guildId;
     if (!guildId) return interaction.reply({ content: "❌ Server only.", ephemeral: true });
 
-    // IMPORTANT: Discord gives a button interaction only ~3 seconds to be
-    // acknowledged. Music actions such as skip/autoplay can involve yt-dlp,
-    // FFmpeg and network/voice work that legitimately takes longer. Defer the
-    // interaction immediately so Discord never shows "didn't respond in time".
     const isQueue = interaction.customId === "death_music_queue";
     try {
       if (isQueue) await interaction.deferReply({ ephemeral: true });
@@ -132,34 +124,54 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
+    // Queue needs the current queue data, so it remains synchronous. All
+    // playback-changing controls are deliberately fire-and-forget: Discord
+    // should acknowledge the button immediately while yt-dlp/FFmpeg works in
+    // the background. The sticky panel updates independently.
     try {
       switch (interaction.customId) {
-        case "death_music_pause": await music.pause(guildId); break;
-        case "death_music_resume": await music.resume(guildId); break;
-        case "death_music_skip": await music.skip(guildId); break;
-        case "death_music_stop": await music.stop(guildId); break;
-        case "death_music_shuffle": await music.shuffle(guildId); break;
+        case "death_music_pause":
+          Promise.resolve(music.pause(guildId)).catch(error => console.warn("⚠️ Pause failed:", error?.message || error));
+          break;
+        case "death_music_resume":
+          Promise.resolve(music.resume(guildId)).catch(error => console.warn("⚠️ Resume failed:", error?.message || error));
+          break;
+        case "death_music_skip":
+          Promise.resolve(music.skip(guildId)).catch(error => console.warn("⚠️ Skip failed:", error?.message || error));
+          break;
+        case "death_music_stop":
+          Promise.resolve(music.stop(guildId)).catch(error => console.warn("⚠️ Stop failed:", error?.message || error));
+          break;
+        case "death_music_shuffle":
+          Promise.resolve(music.shuffle(guildId)).catch(error => console.warn("⚠️ Shuffle failed:", error?.message || error));
+          break;
         case "death_music_loop": {
           const state = music.getState(guildId);
           const next = state.loop === "none" ? "track" : state.loop === "track" ? "queue" : "none";
-          await music.setLoop(guildId, next);
+          Promise.resolve(music.setLoop(guildId, next)).catch(error => console.warn("⚠️ Loop failed:", error?.message || error));
           break;
         }
         case "death_music_vol_down": {
           const p = music.getPlayer(guildId);
-          await music.setVolume(guildId, Math.max(1, Number(p?.volume || 70) - 10));
+          Promise.resolve(music.setVolume(guildId, Math.max(1, Number(p?.volume || 70) - 10))).catch(error => console.warn("⚠️ Volume down failed:", error?.message || error));
           break;
         }
         case "death_music_vol_up": {
           const p = music.getPlayer(guildId);
-          await music.setVolume(guildId, Math.min(100, Number(p?.volume || 70) + 10));
+          Promise.resolve(music.setVolume(guildId, Math.min(100, Number(p?.volume || 70) + 10))).catch(error => console.warn("⚠️ Volume up failed:", error?.message || error));
           break;
         }
         case "death_music_autoplay": {
           const state = music.getState(guildId);
           state.autoplay = !state.autoplay;
+          Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
           if (state.autoplay && !state.current && !state.queue.length) {
-            await music.autoplayNext(guildId).catch(() => {});
+            state.transitioning = true;
+            Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
+            Promise.resolve(music.autoplayNext(guildId)).catch(error => {
+              state.transitioning = false;
+              console.warn("⚠️ Autoplay failed:", error?.message || error);
+            });
           }
           break;
         }
@@ -169,16 +181,13 @@ client.on(Events.InteractionCreate, async interaction => {
           return await interaction.editReply({ content: `📜 **DEATH Music Queue**\n${text}` });
         }
         case "death_music_refresh":
-          await music.ensurePanel(guildId);
-          return await interaction.editReply({ content: "🔄 Music panel refreshed.", ephemeral: true });
+          Promise.resolve(music.ensurePanel(guildId)).catch(() => {});
+          break;
       }
 
-      // The button was deferred with deferUpdate(), so editReply is the
-      // acknowledgement/final response instead of reply() on an expired
-      // interaction. This also gives skip/autoplay time to finish cleanly.
-      await music.refreshPanel(guildId).catch(error => {
-        console.warn("⚠️ Music panel refresh after button:", error?.message || error);
-      });
+      // No panel edit is awaited here. This keeps every control responsive;
+      // panel rendering is serialized inside directPanelPatch.js.
+      Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
       return await interaction.editReply({ content: "✅ Music control updated.", ephemeral: true }).catch(() => {});
     } catch (error) {
       console.error("❌ Music button error:", error);
