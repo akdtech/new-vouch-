@@ -32,6 +32,5 @@ COPY . .
 
 EXPOSE 3000
 
-# Keep the runtime patch chain in the image itself so Railway's runtime command
-# cannot accidentally boot the old panel/control implementation.
-CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
+# Keep the complete direct-music patch chain in the image itself.
+CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
