@@ -95,18 +95,10 @@ plugins:
     ytdlp:
       path: "yt-dlp"
       searchLimit: 10
-      customLoadArgs:
-        - "-q"
-        - "--no-warnings"
-        - "--flat-playlist"
-        - "--skip-download"
-        - "-J"
-      customPlaybackArgs:
-        - "-q"
-        - "--no-warnings"
-        - "-f"
-        - "bestaudio"
-        - "-J"
+      # IMPORTANT: use LavaSrc/yt-dlp default arguments.
+      # The previous custom playback args included -J, which makes yt-dlp
+      # return JSON metadata instead of audio. Lavalink then tried to decode
+      # that JSON as MP3 and playback failed.
 
 metrics:
   prometheus:
