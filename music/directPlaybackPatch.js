@@ -6,6 +6,16 @@ const { createAudioResource, StreamType, AudioPlayerStatus } = require("@discord
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
 const POT_PROVIDER = process.env.YTDLP_POT_PROVIDER_URL || "http://bgutil-pot.railway.internal:4416";
+const STARTUP_TIMEOUT_MS = 20000;
+
+function conciseError(text, max = 900) {
+  return String(text || "").replace(/\s+/g, " ").trim().slice(-max);
+}
+
+function isYoutubeBotBlock(text) {
+  const value = String(text || "").toLowerCase();
+  return value.includes("sign in to confirm") || value.includes("not a bot") || value.includes("login_required");
+}
 
 function installDirectPlaybackPatch(DirectMusicManager) {
   if (!DirectMusicManager || DirectMusicManager.prototype.__deathDirectPlaybackPatched) return;
@@ -23,10 +33,10 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     state.paused = false;
     state.audioResource = null;
 
-    // YouTube is currently enforcing anti-bot checks on many Railway IPs.
-    // Use the fresh BgUtils PO-token provider with mweb first, then retain
-    // several client fallbacks for videos with client-specific restrictions.
-    const clientProfiles = ["mweb", "tv", "android_vr", "default"];
+    // Railway datacenter IPs can receive YouTube bot checks even with a PO-token
+    // provider. Try several client profiles, including web_safari/web_embedded,
+    // then fall back to the PO-token mweb client.
+    const clientProfiles = ["tv", "web_safari", "web_embedded", "mweb", "android_vr", "default"];
     const failures = [];
 
     for (const client of clientProfiles) {
@@ -41,20 +51,16 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             "--js-runtimes", "deno",
             "--remote-components", "ejs:github",
             "--extractor-args", `youtube:player_client=${client};youtubepot-bgutilhttp:base_url=${POT_PROVIDER}`,
-            "--retries", "3",
-            "--fragment-retries", "3",
+            "--retries", "2",
+            "--fragment-retries", "2",
             "--retry-sleep", "linear=1::2",
-            "--socket-timeout", "20",
+            "--sleep-requests", "1",
             "--format", "bestaudio/best",
             "--output", "-",
             track.url
           ];
 
           const yt = spawn(YTDLP, ytArgs, { stdio: ["ignore", "pipe", "pipe"] });
-
-          // yt-dlp is already responsible for reconnect/retry behaviour.
-          // FFmpeg receives a local stdin pipe, so FFmpeg's HTTP reconnect
-          // options are invalid here (and fail on Debian FFmpeg 5.1).
           const ffArgs = [
             "-hide_banner",
             "-loglevel", "warning",
@@ -106,24 +112,17 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             if (ffStderr.length > 12000) ffStderr = ffStderr.slice(-12000);
           });
 
-          yt.stdout.on("data", () => {
-            gotYtBytes = true;
-          });
-
-          // Only declare success after FFmpeg has produced actual PCM audio.
+          yt.stdout.on("data", () => { gotYtBytes = true; });
           ff.stdout.on("data", () => {
             gotPcmBytes = true;
             if (!settled) success();
           });
 
-          // FFmpeg can close its stdin while yt-dlp is still flushing bytes.
-          // EPIPE is expected during teardown and must never become uncaught.
           ff.stdin.on("error", error => {
             if (error?.code !== "EPIPE") {
               console.warn(`⚠️ FFmpeg stdin error (${client}): ${error?.message || error}`);
             }
           });
-
           yt.stdout.on("error", error => {
             if (error?.code !== "EPIPE") fail(error);
           });
@@ -137,7 +136,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
 
           yt.on("close", code => {
             if (code !== 0 && !gotYtBytes && !gotPcmBytes) {
-              const detail = ytStderr.trim().split(/\r?\n/).filter(Boolean).slice(-6).join(" | ");
+              const detail = conciseError(ytStderr, 1600);
               return fail(new Error(`yt-dlp ${client} exited with code ${code}: ${detail}`.trim()));
             }
             if (code !== 0 && !gotPcmBytes) {
@@ -147,23 +146,20 @@ function installDirectPlaybackPatch(DirectMusicManager) {
 
           ff.on("close", code => {
             if (!gotPcmBytes) {
-              const detail = ffStderr.trim().split(/\r?\n/).filter(Boolean).slice(-6).join(" | ");
+              const detail = conciseError(ffStderr, 1200);
               return fail(new Error(`FFmpeg ${client} exited with code ${code}: ${detail}`.trim()));
             }
           });
 
-          // YouTube may intentionally sleep before delivering the selected
-          // format. Eight seconds was too aggressive for Railway; allow a
-          // normal cold start while still failing promptly on real errors.
           firstBytesTimer = setTimeout(() => {
             if (gotPcmBytes || player.state.status === AudioPlayerStatus.Buffering || player.state.status === AudioPlayerStatus.Playing) {
               success();
             } else {
-              const ytDetail = ytStderr.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
-              const ffDetail = ffStderr.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
-              fail(new Error(`No PCM audio received from FFmpeg client ${client} within 20 seconds. yt-dlp=${ytDetail || "none"}; ffmpeg=${ffDetail || "none"}`));
+              const ytDetail = conciseError(ytStderr, 1400);
+              const ffDetail = conciseError(ffStderr, 600);
+              fail(new Error(`No PCM audio received from FFmpeg client ${client} within ${STARTUP_TIMEOUT_MS / 1000}s. yt-dlp=${ytDetail || "none"}; ffmpeg=${ffDetail || "none"}`));
             }
-          }, 20000);
+          }, STARTUP_TIMEOUT_MS);
         });
 
         const { yt, ff } = result;
@@ -183,8 +179,13 @@ function installDirectPlaybackPatch(DirectMusicManager) {
         return;
       } catch (error) {
         const message = error?.message || String(error);
-        failures.push(`${client}: ${message}`);
-        console.warn(`⚠️ Direct stream client ${client} failed: ${message}`);
+        const short = conciseError(message, 1800);
+        failures.push(`${client}: ${short}`);
+        if (isYoutubeBotBlock(message)) {
+          console.warn(`🚧 YouTube bot check on ${client}; trying next client.`);
+        } else {
+          console.warn(`⚠️ Direct stream client ${client} failed: ${short}`);
+        }
       }
     }
 
@@ -195,7 +196,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     throw new Error(`No playable YouTube stream was produced. ${failures.join(" || ")}`);
   };
 
-  console.log("🛠️ DEATH direct playback patch loaded: BgUtils PO-token YouTube + resilient FFmpeg PCM pipeline.");
+  console.log("🛠️ DEATH direct playback patch loaded: resilient YouTube clients + BgUtils PO-token + safe FFmpeg PCM pipeline.");
 }
 
 try {
