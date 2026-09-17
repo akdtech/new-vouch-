@@ -16,38 +16,26 @@ function installDirectPlaybackPatch(DirectMusicManager) {
 
     return new Promise((resolve, reject) => {
       const child = spawn(YTDLP, [
-        "--no-warnings",
-        "--no-progress",
-        "--no-playlist",
-        "--js-runtimes", "deno",
-        "--remote-components", "ejs:github",
-        "--format", "bestaudio/best",
-        "--get-url",
-        url
+        "--no-warnings", "--no-progress", "--no-playlist",
+        "--js-runtimes", "deno", "--remote-components", "ejs:github",
+        "--format", "bestaudio/best", "--get-url", url
       ], { stdio: ["ignore", "pipe", "pipe"] });
-
-      let stdout = "";
-      let stderr = "";
-      let settled = false;
+      let stdout = "", stderr = "", settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         try { child.kill("SIGKILL"); } catch {}
         reject(new Error("yt-dlp stream URL lookup timed out."));
       }, 45000);
-
-      child.stdout.on("data", chunk => { stdout += chunk.toString(); });
-      child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+      child.stdout.on("data", c => { stdout += c.toString(); });
+      child.stderr.on("data", c => { stderr += c.toString(); });
       child.on("error", error => {
         if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(error);
+        settled = true; clearTimeout(timer); reject(error);
       });
       child.on("close", code => {
         if (settled) return;
-        settled = true;
-        clearTimeout(timer);
+        settled = true; clearTimeout(timer);
         const streamUrl = stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0];
         if (code === 0 && streamUrl) return resolve(streamUrl);
         const detail = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-8).join(" | ");
@@ -60,7 +48,6 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     const state = this.getState(guildId);
     const player = this.players.get(guildId) || this.ensurePlayer(guildId);
     this.bindPlayerEvents(guildId, player);
-
     this.destroyStream(guildId);
     state.current = track;
     state.startedAt = Date.now();
@@ -72,36 +59,23 @@ function installDirectPlaybackPatch(DirectMusicManager) {
       streamUrl = await this.resolveAudioUrl(track);
     } catch (error) {
       console.error(`❌ Direct yt-dlp resolve failed [${guildId}]:`, error?.message || error);
-      state.current = null;
-      state.startedAt = 0;
-      state.positionOffset = 0;
+      state.current = null; state.startedAt = 0; state.positionOffset = 0;
       throw error;
     }
 
     const ffArgs = [
-      "-hide_banner",
-      "-loglevel", "warning",
-      "-reconnect", "1",
-      "-reconnect_streamed", "1",
-      "-reconnect_delay_max", "5",
+      "-hide_banner", "-loglevel", "warning",
+      "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
       ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-      "-i", streamUrl,
-      "-vn",
-      "-f", "s16le",
-      "-ar", "48000",
-      "-ac", "2",
-      "pipe:1"
+      "-i", streamUrl, "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
     ];
-
     const ff = spawn(FFMPEG, ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
     let ffStderr = "";
-    ff.stderr.on("data", chunk => {
-      ffStderr += chunk.toString();
+    ff.stderr.on("data", c => {
+      ffStderr += c.toString();
       if (ffStderr.length > 12000) ffStderr = ffStderr.slice(-12000);
     });
-
     this.streams.set(guildId, { ff, streamUrl });
-
     ff.on("error", error => {
       if (state.current === track) console.error(`❌ FFmpeg stream error [${guildId}]:`, error?.message || error);
     });
@@ -110,26 +84,27 @@ function installDirectPlaybackPatch(DirectMusicManager) {
       if (code !== 0) console.warn(`⚠️ FFmpeg ended with code ${code}: ${ffStderr.trim().split(/\r?\n/).slice(-3).join(" | ")}`);
     });
 
-    const resource = createAudioResource(ff.stdout, {
-      inputType: StreamType.Raw,
-      inlineVolume: true,
-      metadata: track
-    });
+    const resource = createAudioResource(ff.stdout, { inputType: StreamType.Raw, inlineVolume: true, metadata: track });
     resource.volume?.setVolume(Math.max(0.01, state.volume / 100));
-
     player.play(resource);
     await new Promise(resolve => setImmediate(resolve));
 
     console.log(`▶️ Direct playback started: ${track.title}`);
     console.log(`🔊 Direct audio resource status: ${player.state.status}`);
     await this.refreshPanel(guildId).catch(() => {});
-
     if (player.state.status === AudioPlayerStatus.Idle) {
       throw new Error("Discord audio player remained idle after starting the stream.");
     }
   };
 
   console.log("🛠️ DEATH direct playback patch loaded: yt-dlp URL resolution + FFmpeg reconnect stream.");
+}
+
+try {
+  const DirectMusicManager = require("./DirectMusicManager");
+  installDirectPlaybackPatch(DirectMusicManager);
+} catch (error) {
+  console.error("❌ Direct playback patch failed to load:", error?.message || error);
 }
 
 module.exports = { installDirectPlaybackPatch };
