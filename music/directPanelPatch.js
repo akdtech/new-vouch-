@@ -1,6 +1,6 @@
 "use strict";
 
-/* DEATH Music 24/7 — focused, premium player UI. */
+/* DEATH Music 24/7 — one persistent, premium player UI. */
 const MusicManager = require("./DirectMusicManager");
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { AudioPlayerStatus } = require("@discordjs/voice");
@@ -26,7 +26,7 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
   const button = (id, label, emoji, style = ButtonStyle.Secondary, disabled = false) =>
     new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(disabled);
 
-  MusicManager.prototype.ensurePanel = async function stylishEnsurePanel(guildId) {
+  MusicManager.prototype.ensurePanel = async function stickyEnsurePanel(guildId) {
     const state = this.getState(guildId);
     const channel = await this.findPanelChannel(guildId);
     if (!channel) throw new Error("Music panel channel is not available.");
@@ -64,7 +64,6 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
       try { embed.setThumbnail(current.thumbnail); } catch {}
     }
 
-    // Only the seven requested controls. No stop, shuffle, loop or refresh clutter.
     const row1 = new ActionRowBuilder().addComponents(
       button("death_music_pause", "Pause", "⏸️", ButtonStyle.Secondary, !current || paused),
       button("death_music_resume", "Play", "▶️", ButtonStyle.Success, !current || !paused),
@@ -79,11 +78,33 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
 
     const payload = { embeds: [embed], components: [row1, row2] };
     let message = null;
+
+    // First use the remembered message. This keeps normal refreshes as edits.
     if (state.panelMessageId && state.panelChannelId === channel.id) {
       try { message = await channel.messages.fetch(state.panelMessageId); } catch { message = null; }
     }
-    if (message) await message.edit(payload);
-    else {
+
+    // On a Railway restart the in-memory ID is lost. Find the existing DEATH
+    // panel before creating anything. Delete duplicate old DEATH panels so the
+    // channel is left with exactly one sticky control panel.
+    if (!message) {
+      const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+      const panels = messages
+        ? [...messages.values()].filter(m => m.author?.id === this.client.user.id && m.embeds?.[0]?.title === "💀 DEATH MUSIC • 24/7")
+        : [];
+      message = panels[0] || null;
+      if (message) {
+        state.panelMessageId = message.id;
+        state.panelChannelId = channel.id;
+        for (const duplicate of panels.slice(1)) {
+          try { await duplicate.delete(); } catch {}
+        }
+      }
+    }
+
+    if (message) {
+      await message.edit(payload);
+    } else {
       message = await channel.send(payload);
       state.panelMessageId = message.id;
       state.panelChannelId = channel.id;
@@ -91,5 +112,5 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     return message;
   };
 
-  console.log("🎨 DEATH stylish music panel loaded: 7 focused controls.");
+  console.log("🎨 DEATH stylish music panel loaded: ONE sticky panel + 7 focused controls.");
 }
