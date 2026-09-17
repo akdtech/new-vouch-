@@ -17,7 +17,6 @@ const MusicManager = require("./MusicManager");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const originalEnsure247 = MusicManager.prototype.ensure247;
 const originalSearch = MusicManager.prototype.search;
-const originalAutoplayNext = MusicManager.prototype.autoplayNext;
 const originalSetupEvents = MusicManager.prototype.setupEvents;
 const originalPlay = MusicManager.prototype.play;
 
@@ -29,6 +28,30 @@ async function reliableSearch(manager, query, requester = null) {
     return originalSearch.call(manager, clean, requester);
   }
 
+  /*
+   * IMPORTANT:
+   * musicRuntimePatch.js already contains the source-aware Kazagumo
+   * search implementation. Do not call kazagumo.search("ytmsearch:...")
+   * directly here: depending on Kazagumo's default search engine it can
+   * turn into malformed identifiers such as ytsearch:ytmsearch:...
+   * and return zero tracks.
+   *
+   * Reuse that repaired search implementation first. It searches YT Music,
+   * YouTube and SoundCloud with Kazagumo's source option and ranks results.
+   */
+  try {
+    console.log(`🔎 Reliable autoplay search: "${clean}"`);
+    const result = await originalSearch.call(manager, clean, requester);
+    if (result?.tracks?.length) {
+      console.log(`✅ Reliable autoplay search found ${result.tracks.length} track(s): "${clean}"`);
+      return result;
+    }
+  } catch (error) {
+    console.warn(`⚠️ Repaired music search failed for "${clean}":`, error?.message || error);
+  }
+
+  /* Last-resort direct searches. These are deliberately attempted only
+     after the repaired MusicManager search has failed. */
   const identifiers = [
     `ytdlpsearch:${clean}`,
     `ytmsearch:${clean}`,
@@ -37,14 +60,14 @@ async function reliableSearch(manager, query, requester = null) {
 
   for (const identifier of identifiers) {
     try {
-      console.log(`🔎 Reliable music search: ${identifier}`);
+      console.log(`🔎 Reliable fallback search: ${identifier}`);
       const result = await manager.kazagumo.search(identifier, { requester });
       if (result?.tracks?.length) {
-        console.log(`✅ Reliable search found ${result.tracks.length} track(s) using ${identifier}`);
+        console.log(`✅ Reliable fallback found ${result.tracks.length} track(s) using ${identifier}`);
         return result;
       }
     } catch (error) {
-      console.warn(`⚠️ Reliable search failed for ${identifier}:`, error?.message || error);
+      console.warn(`⚠️ Reliable fallback failed for ${identifier}:`, error?.message || error);
     }
   }
 
