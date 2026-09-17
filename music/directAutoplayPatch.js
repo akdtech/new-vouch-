@@ -22,6 +22,7 @@ const originalPlay=MusicManager.prototype.play;
 MusicManager.prototype.play=async function patchedPlay(args){
   const result=await originalPlay.call(this,args),state=this.getState(args.guildId),track=result?.track||state.current||null,title=clean(track?.title),artist=clean(track?.author||track?.uploader),query=clean(args?.query);
   state.autoplayBlockedUntil=0;
+  state.autoplayBlockNoticeUntil=0;
   state.autoplayContext={artist:artistIsUseful(artist)?artist:"",title,query,words:[...new Set([...words(title),...words(query)])].slice(0,8)};
   console.log(`🎯 Autoplay context: ${artist||"search/genre"}${title?` — ${title}`:""}`);
   return result;
@@ -32,7 +33,8 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
   if(!player||!state.autoplay||state.intentionalLeave||state.autoplayBusy)return false;
   if(state.current||state.queue.length)return false;
   if(Number(state.autoplayBlockedUntil||0)>Date.now()){
-    console.warn("⏸️ Autoplay paused temporarily because YouTube is returning bot-check responses.");
+    // Recovery may call autoplay repeatedly. Stay quiet during the block window
+    // instead of filling Railway logs with identical messages every few seconds.
     return false;
   }
   state.autoplayBusy=true;
@@ -73,7 +75,10 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
   }catch(error){
     if(isYoutubeBotBlock(error)){
       state.autoplayBlockedUntil=Date.now()+AUTOPLAY_BLOCK_MS;
-      console.warn("⏸️ YouTube bot-check detected; pausing autoplay attempts for 15 minutes to avoid hammering the Railway IP.");
+      if(Number(state.autoplayBlockNoticeUntil||0)<=Date.now()){
+        state.autoplayBlockNoticeUntil=Date.now()+AUTOPLAY_BLOCK_MS;
+        console.warn("⏸️ Autoplay paused temporarily because YouTube is returning bot-check responses. Retry window=15m.");
+      }
     }
     console.error("❌ Context autoplay error:",error?.message||error);
     state.current=null;
