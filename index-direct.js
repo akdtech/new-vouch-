@@ -124,10 +124,6 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // Queue needs the current queue data, so it remains synchronous. All
-    // playback-changing controls are deliberately fire-and-forget: Discord
-    // should acknowledge the button immediately while yt-dlp/FFmpeg works in
-    // the background. The sticky panel updates independently.
     try {
       switch (interaction.customId) {
         case "death_music_pause":
@@ -185,16 +181,15 @@ client.on(Events.InteractionCreate, async interaction => {
           break;
       }
 
-      // No panel edit is awaited here. This keeps every control responsive;
-      // panel rendering is serialized inside directPanelPatch.js.
+      // Playback controls acknowledge with deferUpdate() only. There is no
+      // ephemeral "Music control updated" message, so the chat stays clean.
       Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
-      return await interaction.editReply({ content: "✅ Music control updated.", ephemeral: true }).catch(() => {});
+      if (isQueue) return;
+      return;
     } catch (error) {
       console.error("❌ Music button error:", error);
-      return interaction.editReply({
-        content: `❌ ${error?.message || "Music control failed."}`,
-        ephemeral: true
-      }).catch(() => {});
+      Promise.resolve(music.refreshPanel(guildId)).catch(() => {});
+      return;
     }
   }
 });
