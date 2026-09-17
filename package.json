@@ -1,20 +1,20 @@
 {
   "name": "gmao-death-discord-bot",
-  "version": "3.0.0",
-  "description": "DEATH × GMAO all-in-one Discord community bot with 24/7 music, moderation, security and utilities.",
+  "version": "4.0.0",
+  "description": "DEATH × GMAO all-in-one Discord community bot with direct 24/7 music playback.",
   "main": "index.js",
   "scripts": {
-    "start": "node -r ./music/musicRuntimePatch.js -r ./music/voiceRuntimePatch.js -r ./music/startupAutoplayPatch.js index.js",
+    "start": "node index.js",
     "deploy": "node deploy-commands.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24.17.0"
   },
   "dependencies": {
+    "@discordjs/opus": "0.10.0",
+    "@discordjs/voice": "0.19.2",
     "discord.js": "14.27.0",
     "dotenv": "17.2.2",
-    "kazagumo": "3.4.3",
-    "shoukaku": "4.3.0",
     "pg": "8.16.3"
   }
 }
