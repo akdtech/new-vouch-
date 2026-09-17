@@ -4,7 +4,7 @@
   "description": "DEATH × GMAO all-in-one Discord community bot with direct 24/7 music playback.",
   "main": "index-direct.js",
   "scripts": {
-    "start": "node index-direct.js",
+    "start": "node -r ./music/directCompatibilityPatch.js index-direct.js",
     "deploy": "node deploy-commands.js"
   },
   "engines": {
