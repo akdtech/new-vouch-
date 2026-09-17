@@ -13,7 +13,7 @@ const INSTANCES = String(process.env.INVIDIOUS_API_URLS || [
   "https://invidious.f5.si"
 ].join(",")).split(",").map(v => v.trim().replace(/\/$/, "")).filter(Boolean);
 const TIMEOUT = Math.max(3000, Number(process.env.INVIDIOUS_TIMEOUT_MS || 9000));
-const STARTUP = Math.max(4000, Number(process.env.INVIDIOUS_STARTUP_TIMEOUT_MS || 9000));
+const STARTUP = Math.max(4000, Number(process.env.INVIDIOUS_STARTUP_TIMEOUT_MS || 12000));
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
 
 const clean = v => String(v || "").replace(/\s+/g, " ").trim();
@@ -64,13 +64,18 @@ async function searchInvidious(query, requester) {
   return { type: "track", tracks };
 }
 async function infoInvidious(id, requester) {
-  const { data, base } = await first(`/api/v1/videos/${id}`);
+  // local=true is important: it asks the Invidious instance to proxy the
+  // playback URL instead of handing Railway a direct googlevideo.com URL.
+  // That avoids sending the Railway datacenter IP straight to YouTube.
+  const { data, base } = await first(`/api/v1/videos/${id}?local=true`);
   const track = trackFrom({ videoId: id, title: data?.title, author: data?.author, lengthSeconds: data?.lengthSeconds, videoThumbnails: data?.videoThumbnails }, requester);
   if (!track) throw new Error("Invidious returned invalid video metadata.");
   const formats = [...(Array.isArray(data?.adaptiveFormats) ? data.adaptiveFormats : []), ...(Array.isArray(data?.formatStreams) ? data.formatStreams : [])];
-  const audio = formats.filter(x => x?.url && (String(x?.type || "").toLowerCase().includes("audio") || String(x?.mimeType || "").toLowerCase().includes("audio"))).sort((a,b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))[0];
-  if (!audio?.url) throw new Error("Invidious returned no usable audio stream.");
-  console.log(`🎼 Invidious stream metadata via ${base}: ${track.title}`);
+  const audio = formats
+    .filter(x => x?.url && (String(x?.type || "").toLowerCase().includes("audio") || String(x?.mimeType || "").toLowerCase().includes("audio")))
+    .sort((a,b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))[0];
+  if (!audio?.url) throw new Error("Invidious returned no usable proxied audio stream.");
+  console.log(`🎼 Invidious proxied stream metadata via ${base}: ${track.title}`);
   return { base, track, audioUrl: audio.url };
 }
 async function startInvidious(manager, guildId, track, startMs = 0) {
@@ -103,7 +108,7 @@ async function startInvidious(manager, guildId, track, startMs = 0) {
     let settled = false, got = false, stderr = "", timer;
     const cleanup = () => { if (timer) clearTimeout(timer); try { ff.stdout.unpipe(pcm); } catch {} try { ff.kill("SIGKILL"); } catch {} };
     const fail = reason => { if (settled) return; settled = true; cleanup(); try { player.stop(true); } catch {} try { pcm.destroy(); } catch {} manager.destroyStream(guildId); state.audioResource = null; state.transitioning = false; console.warn(`⚠️ Invidious playback failed; continuing fallback chain: ${reason}`); resolve(false); };
-    const success = () => { if (settled) return; settled = true; clearTimeout(timer); state.transitioning = false; state.startedAt = Date.now(); state.audioResource = resource; Promise.resolve(manager.refreshPanel?.(guildId)).catch(() => {}); console.log(`🚀 Invidious direct playback started: ${merged.title}`); resolve(true); };
+    const success = () => { if (settled) return; settled = true; clearTimeout(timer); state.transitioning = false; state.startedAt = Date.now(); state.audioResource = resource; Promise.resolve(manager.refreshPanel?.(guildId)).catch(() => {}); console.log(`🚀 Invidious direct playback started: ${merged.title}`); console.log(`🌐 Invidious proxy source: ${meta.base}`); resolve(true); };
     ff.stderr.on("data", c => { stderr += c.toString(); if (stderr.length > 5000) stderr = stderr.slice(-5000); });
     ff.stdout.on("data", c => { if (c?.length) { got = true; success(); } });
     ff.stdout.on("error", e => fail(e?.message || e)); ff.on("error", e => fail(e?.message || e));
@@ -116,27 +121,30 @@ async function startInvidious(manager, guildId, track, startMs = 0) {
 function install(Manager) {
   if (!Manager || Manager.prototype.__deathInvidiousFallbackPatched) return;
   Manager.prototype.__deathInvidiousFallbackPatched = true;
-  const pipedOrYtdlpSearch = Manager.prototype.search;
+  const originalSearch = Manager.prototype.search;
   Manager.prototype.search = async function(query, requester) {
     const value = typeof query === "string" ? query : (query?.query || query?.search || query?.name || "");
     const q = this.cleanQuery(value);
-    if (!q) return pipedOrYtdlpSearch.call(this, query, requester);
+    if (!q) return originalSearch.call(this, query, requester);
     try {
       if (this.isYouTubeUrl(q)) {
         const id = ytId(q); if (id) return { type: "track", tracks: [(await infoInvidious(id, requester || this.client.user)).track] };
       } else {
         return await searchInvidious(q, requester || this.client.user);
       }
-    } catch (e) { console.warn(`⚠️ Invidious search unavailable; continuing to Piped/yt-dlp: ${e?.message || e}`); }
-    return pipedOrYtdlpSearch.call(this, q, requester);
+    } catch (e) { console.warn(`⚠️ Invidious search unavailable; continuing to yt-dlp: ${e?.message || e}`); }
+    return originalSearch.call(this, q, requester);
   };
-  const pipedOrYtdlpStart = Manager.prototype.startTrack;
+  const originalStart = Manager.prototype.startTrack;
   Manager.prototype.startTrack = async function(guildId, track, startMs = 0) {
-    try { if (/youtube\.com|youtu\.be/i.test(track?.url || "") && await startInvidious(this, guildId, track, startMs)) return; }
-    catch (e) { console.warn(`⚠️ Invidious playback exception; continuing to Piped/yt-dlp: ${e?.message || e}`); }
-    return pipedOrYtdlpStart.call(this, guildId, track, startMs);
+    try {
+      if (/youtube\.com|youtu\.be/i.test(track?.url || "") && await startInvidious(this, guildId, track, startMs)) return;
+    } catch (e) {
+      console.warn(`⚠️ Invidious playback exception; continuing to yt-dlp/Piped: ${e?.message || e}`);
+    }
+    return originalStart.call(this, guildId, track, startMs);
   };
-  console.log(`🛟 DEATH Invidious fallback loaded: ${INSTANCES.length} public instances before Piped/yt-dlp.`);
+  console.log(`🛟 DEATH Invidious fallback loaded: ${INSTANCES.length} public proxy instances before direct yt-dlp/Piped.`);
 }
 
 try { install(require("./DirectMusicManager")); }
