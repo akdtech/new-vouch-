@@ -1,6 +1,6 @@
 "use strict";
 
-/* DEATH Music 24/7 — focused, polished player panel. */
+/* DEATH Music 24/7 — focused, premium player UI. */
 const MusicManager = require("./DirectMusicManager");
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { AudioPlayerStatus } = require("@discordjs/voice");
@@ -9,7 +9,7 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
   MusicManager.prototype.__deathDirectPanelPatched = true;
 
   const clean = value => String(value || "").replace(/\s+/g, " ").trim();
-  const format = (ms = 0) => {
+  const format = ms => {
     const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
     const h = Math.floor(total / 3600);
     const m = Math.floor((total % 3600) / 60);
@@ -23,10 +23,10 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     const filled = Math.min(slots - 1, Math.floor(ratio * slots));
     return `${"━".repeat(filled)}●${"━".repeat(Math.max(0, slots - filled - 1))}`;
   };
-  const btn = (id, label, emoji, style = ButtonStyle.Secondary, disabled = false) =>
+  const button = (id, label, emoji, style = ButtonStyle.Secondary, disabled = false) =>
     new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(disabled);
 
-  const renderPanel = async function renderPanel(guildId) {
+  MusicManager.prototype.ensurePanel = async function stylishEnsurePanel(guildId) {
     const state = this.getState(guildId);
     const channel = await this.findPanelChannel(guildId);
     if (!channel) throw new Error("Music panel channel is not available.");
@@ -42,14 +42,14 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     const title = clean(current?.title) || "Nothing is playing";
     const author = clean(current?.author || current?.uploader) || "DEATH Music 24/7";
     const auto = Boolean(state.autoplay);
-    const relation = clean(current?.autoplayGroup) || (current?.isAutoplay ? "Related music" : "Manual selection");
+    const mode = current?.isAutoplay ? "♾️ Related autoplay" : "🎧 Manual selection";
 
     const embed = new EmbedBuilder()
       .setTitle("💀 DEATH MUSIC • 24/7")
       .setDescription(
         `### ${title}\n` +
         `🎤 **${author}**\n` +
-        `> ${current?.isAutoplay ? "♾️ Autoplay • " : "🎧 Manual • "}${relation}\n\n` +
+        `> ${mode}\n\n` +
         `\`${bar(position, duration)}\`\n` +
         `\`${format(position)}\` / \`${format(duration)}\`  •  ${paused ? "⏸️ Paused" : playing ? "▶️ Playing" : "⏹️ Ready"}`
       )
@@ -64,16 +64,17 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
       try { embed.setThumbnail(current.thumbnail); } catch {}
     }
 
+    // Only the seven requested controls. No stop, shuffle, loop or refresh clutter.
     const row1 = new ActionRowBuilder().addComponents(
-      btn("death_music_pause", "Pause", "⏸️", ButtonStyle.Secondary, !current || paused),
-      btn("death_music_resume", "Play", "▶️", ButtonStyle.Success, !current || !paused),
-      btn("death_music_skip", "Skip", "⏭️", ButtonStyle.Primary, !current),
-      btn("death_music_queue", "Queue", "📜")
+      button("death_music_pause", "Pause", "⏸️", ButtonStyle.Secondary, !current || paused),
+      button("death_music_resume", "Play", "▶️", ButtonStyle.Success, !current || !paused),
+      button("death_music_skip", "Skip", "⏭️", ButtonStyle.Primary, !current),
+      button("death_music_queue", "Queue", "📜")
     );
     const row2 = new ActionRowBuilder().addComponents(
-      btn("death_music_autoplay", auto ? "Autoplay ON" : "Autoplay OFF", "♾️", auto ? ButtonStyle.Success : ButtonStyle.Secondary),
-      btn("death_music_vol_down", "Volume −", "🔉"),
-      btn("death_music_vol_up", "Volume +", "🔊")
+      button("death_music_autoplay", auto ? "Autoplay ON" : "Autoplay OFF", "♾️", auto ? ButtonStyle.Success : ButtonStyle.Secondary),
+      button("death_music_vol_down", "Volume −", "🔉"),
+      button("death_music_vol_up", "Volume +", "🔊")
     );
 
     const payload = { embeds: [embed], components: [row1, row2] };
@@ -90,12 +91,5 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     return message;
   };
 
-  MusicManager.prototype.ensurePanel = renderPanel;
-  MusicManager.prototype.refreshPanel = function refreshPanel(guildId) {
-    return renderPanel.call(this, guildId).catch(() => null);
-  };
-
   console.log("🎨 DEATH stylish music panel loaded: 7 focused controls.");
 }
-
-module.exports = MusicManager;
