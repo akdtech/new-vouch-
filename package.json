@@ -1,10 +1,10 @@
 {
   "name": "gmao-death-discord-bot",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "description": "DEATH × GMAO all-in-one Discord community bot with direct 24/7 music playback.",
   "main": "index-direct.js",
   "scripts": {
-    "start": "node -r ./music/directCompatibilityPatch.js -r ./music/directAutoplayPatch.js -r ./music/directPlaybackPatch.js index-direct.js",
+    "start": "node -r ./music/directCompatibilityPatch.js -r ./music/directAutoplayPatch.js -r ./music/directPlaybackPatch.js -r ./music/directControlsPatch.js index-direct.js",
     "deploy": "node deploy-commands.js"
   },
   "engines": {
