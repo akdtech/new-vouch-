@@ -1,18 +1,15 @@
 "use strict";
 
 /*
- * DEATH Music 24/7 startup + reliable playback patch.
+ * DEATH Music 24/7 runtime patch.
  *
- * Reliable path:
- *   1) ytdlpsearch
- *   2) ytmsearch
- *   3) ytsearch
- *
- * This patch also protects the track-to-track transition. Kazagumo can emit
- * playerEnd/playerEmpty while the previous queue.current is still present for
- * a short time. The old autoplay guard returned immediately in that window,
- * leaving the player connected but silent. We now wait for the old track to
- * clear and also retry after playerEnd/playerException.
+ * Guarantees:
+ *  - reliable YouTube/yt-dlp searching
+ *  - manual /play gets priority over autoplay
+ *  - autoplay resumes after the manual queue finishes
+ *  - autoplay rotates Hindi, English TikTok/viral and top English music
+ *  - no immediate repeats
+ *  - track-transition recovery when Kazagumo exposes queue.current briefly
  */
 
 const MusicManager = require("./MusicManager");
@@ -22,6 +19,7 @@ const originalEnsure247 = MusicManager.prototype.ensure247;
 const originalSearch = MusicManager.prototype.search;
 const originalAutoplayNext = MusicManager.prototype.autoplayNext;
 const originalSetupEvents = MusicManager.prototype.setupEvents;
+const originalPlay = MusicManager.prototype.play;
 
 async function reliableSearch(manager, query, requester = null) {
   const clean = manager.cleanQuery(query);
@@ -41,18 +39,12 @@ async function reliableSearch(manager, query, requester = null) {
     try {
       console.log(`🔎 Reliable music search: ${identifier}`);
       const result = await manager.kazagumo.search(identifier, { requester });
-
       if (result?.tracks?.length) {
-        console.log(
-          `✅ Reliable search found ${result.tracks.length} track(s) using ${identifier}`
-        );
+        console.log(`✅ Reliable search found ${result.tracks.length} track(s) using ${identifier}`);
         return result;
       }
     } catch (error) {
-      console.warn(
-        `⚠️ Reliable search failed for ${identifier}:`,
-        error?.message || error
-      );
+      console.warn(`⚠️ Reliable search failed for ${identifier}:`, error?.message || error);
     }
   }
 
@@ -62,45 +54,73 @@ async function reliableSearch(manager, query, requester = null) {
 
 async function waitForPreviousTrackToClear(player, timeout = 8000) {
   const started = Date.now();
-
   while (Date.now() - started < timeout) {
     if (!player?.queue?.current) return true;
     await sleep(250);
   }
-
   return !player?.queue?.current;
+}
+
+const AUTOPLAY_GROUPS = [
+  {
+    name: "Hindi Music",
+    seeds: [
+      "best Hindi songs 2026",
+      "latest Hindi songs 2026",
+      "Hindi hits playlist",
+      "Bollywood hits 2026",
+      "Hindi romantic songs",
+      "Hindi party songs"
+    ]
+  },
+  {
+    name: "English TikTok Viral",
+    seeds: [
+      "TikTok viral songs 2026",
+      "TikTok viral hits 2026",
+      "viral English songs 2026",
+      "TikTok trending songs",
+      "viral pop songs 2026",
+      "TikTok top songs"
+    ]
+  },
+  {
+    name: "Top English",
+    seeds: [
+      "top English songs 2026",
+      "best English songs 2026",
+      "top hits 2026",
+      "global top songs 2026",
+      "best pop hits 2026",
+      "English chart hits 2026"
+    ]
+  }
+];
+
+function chooseAutoplaySeed(manager, guildId) {
+  const state = manager.getState(guildId);
+  const lastGroup = state.autoplayGroup || "";
+  const available = AUTOPLAY_GROUPS.filter(group => group.name !== lastGroup);
+  const group = available[Math.floor(Math.random() * available.length)] || AUTOPLAY_GROUPS[0];
+  const seed = group.seeds[Math.floor(Math.random() * group.seeds.length)];
+  return { group: group.name, seed };
 }
 
 async function reliableAutoplayNext(manager, guildId, player) {
   if (!player) return false;
-
   const state = manager.getState(guildId);
 
-  if (!state.autoplay || manager.autoplayBusy.has(guildId)) {
-    return false;
-  }
+  if (!state.autoplay || manager.autoplayBusy.has(guildId)) return false;
+  if (player.playing || player.paused) return false;
 
-  if (player.playing || player.paused) {
-    return false;
-  }
-
-  // IMPORTANT: after playerEnd, Kazagumo may still expose the previous
-  // track as queue.current for a few milliseconds/seconds. Do not give up.
   if (player.queue?.current) {
     console.log(`⏳ Waiting for previous track to clear before autoplay | guild=${guildId}`);
     const cleared = await waitForPreviousTrackToClear(player, 8000);
-    if (!cleared) {
-      console.warn(`⚠️ Previous track did not clear in time | guild=${guildId}`);
-      return false;
-    }
+    if (!cleared) return false;
   }
 
-  // If another queued track already exists, Kazagumo should play it normally;
-  // don't inject an autoplay track in front of it.
   if ((player.queue?.length || 0) > 0) {
-    if (!player.playing && !player.paused) {
-      await player.play().catch(() => {});
-    }
+    await player.play().catch(() => {});
     return true;
   }
 
@@ -108,27 +128,12 @@ async function reliableAutoplayNext(manager, guildId, player) {
 
   try {
     const recent = manager.recentTracks.get(guildId) || [];
-    const seeds = [
-      "popular music 2026",
-      "top hits",
-      "chill music",
-      "gaming music",
-      "night drive music",
-      "electronic music",
-      "hip hop hits",
-      "pop hits",
-      "rnb hits",
-      "rock classics",
-      "dance music",
-      "lofi beats"
-    ];
 
-    for (let attempt = 1; attempt <= 8; attempt++) {
-      const seed = seeds[Math.floor(Math.random() * seeds.length)];
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      const { group, seed } = chooseAutoplaySeed(manager, guildId);
 
       try {
-        console.log(`🎵 Reliable autoplay ${attempt}/8: "${seed}"`);
-
+        console.log(`🎵 Autoplay ${attempt}/10 [${group}]: "${seed}"`);
         const result = await reliableSearch(manager, seed, manager.client.user);
         if (!result?.tracks?.length) continue;
 
@@ -136,138 +141,97 @@ async function reliableAutoplayNext(manager, guildId, player) {
           const id = manager.getTrackId(track);
           return id && !recent.includes(id);
         });
-
-        const chosen = candidates[0] || result.tracks[0];
+        const chosen = candidates[Math.floor(Math.random() * candidates.length)] || result.tracks[0];
         if (!chosen) continue;
 
-        if (player.playing || player.paused || player.queue?.current) {
-          return true;
-        }
-
+        if (player.playing || player.paused || player.queue?.current) return true;
         if ((player.queue?.length || 0) > 0) {
           await player.play().catch(() => {});
           return true;
         }
 
         const id = manager.getTrackId(chosen);
-        if (id) {
-          manager.recentTracks.set(guildId, [...recent, id].slice(-10));
-        }
+        if (id) manager.recentTracks.set(guildId, [...recent, id].slice(-20));
 
         player.queue.add(chosen);
         await player.play();
 
+        state.autoplayGroup = group;
         state.autoplayContext = {
           query: seed,
+          group,
           artist: manager.getTrackAuthor(chosen),
           title: manager.getTrackTitle(chosen)
         };
-
+        state.autoplayTrackId = id || null;
         state.autoplayGeneration = (state.autoplayGeneration || 0) + 1;
 
-        console.log(
-          `🎵 RELIABLE AUTOPLAY STARTED: ${manager.getTrackTitle(chosen)} — ${manager.getTrackAuthor(chosen)}`
-        );
-
+        console.log(`🎵 AUTOPLAY STARTED [${group}]: ${manager.getTrackTitle(chosen)} — ${manager.getTrackAuthor(chosen)}`);
         await manager.refreshPanel(guildId).catch(() => {});
         return true;
       } catch (error) {
-        console.warn(
-          `⚠️ Reliable autoplay failed for "${seed}":`,
-          error?.message || error
-        );
+        console.warn(`⚠️ Autoplay failed for "${seed}":`, error?.message || error);
       }
     }
 
-    if (!player.playing && !player.paused && !player.queue?.current && (player.queue?.length || 0) === 0) {
-      return originalAutoplayNext.call(manager, guildId, player);
-    }
-
-    return true;
+    return false;
   } finally {
     manager.autoplayBusy.delete(guildId);
   }
 }
 
-async function forceStartupMusic(manager, guildId, player) {
-  if (!player) return false;
+/* Manual /play has priority over an autoplay track.
+ * If autoplay is currently playing, remove it and start the requested song now.
+ * If a manual song is already playing, normal queue behavior is preserved.
+ */
+MusicManager.prototype.play = async function(options) {
+  const guildId = options?.guildId;
+  const playerBefore = guildId ? this.getPlayer(guildId) : null;
+  const state = guildId ? this.getState(guildId) : null;
 
-  const state = manager.getState(guildId);
-  state.autoplay = true;
-
-  if (
-    player.playing ||
-    player.paused ||
-    player.queue?.current ||
-    (player.queue?.length || 0) > 0
-  ) {
-    return true;
+  let interruptAutoplay = false;
+  if (playerBefore && state?.autoplayTrackId) {
+    const currentId = playerBefore.queue?.current ? this.getTrackId(playerBefore.queue.current) : null;
+    interruptAutoplay = Boolean(currentId && currentId === state.autoplayTrackId);
   }
 
-  const seeds = [
-    "popular music 2026",
-    "top hits",
-    "chill music",
-    "gaming music",
-    "lofi beats",
-    "pop hits"
-  ];
+  if (interruptAutoplay) {
+    console.log(`⏭️ Manual /play is taking priority over autoplay | guild=${guildId}`);
+    state.autoplayTrackId = null;
+    state.autoplayContext = null;
 
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    for (const seed of seeds) {
-      try {
-        console.log(`🎵 Startup music attempt ${attempt}/5: searching "${seed}"`);
-
-        const result = await reliableSearch(manager, seed, manager.client.user);
-        const track = result?.tracks?.find(Boolean);
-
-        if (!track) continue;
-
-        if (player.playing || player.paused || player.queue?.current || (player.queue?.length || 0) > 0) {
-          return true;
-        }
-
-        player.queue.add(track);
-        await player.play();
-
-        state.autoplayContext = {
-          query: seed,
-          artist: manager.getTrackAuthor(track),
-          title: manager.getTrackTitle(track)
-        };
-
-        state.autoplayGeneration = (state.autoplayGeneration || 0) + 1;
-
-        console.log(
-          `🎵 AUTO PLAY STARTED: ${manager.getTrackTitle(track)} — ${manager.getTrackAuthor(track)}`
-        );
-
-        await manager.refreshPanel(guildId).catch(() => {});
-        return true;
-      } catch (error) {
-        console.warn(
-          `⚠️ Startup music failed for "${seed}":`,
-          error?.message || error
-        );
+    try {
+      if (playerBefore.queue && typeof playerBefore.queue.clear === "function") {
+        playerBefore.queue.clear();
       }
-    }
+    } catch (_) {}
 
-    await sleep(2000);
+    try {
+      if (typeof playerBefore.stop === "function") await playerBefore.stop().catch(() => {});
+    } catch (_) {}
   }
 
-  console.error("❌ Startup music could not start after 5 attempts.");
-  return false;
-}
+  const result = await originalPlay.call(this, options);
+
+  if (state) {
+    state.autoplay = true;
+    state.autoplayTrackId = null;
+    state.autoplayContext = null;
+    state.lastManualPlayAt = Date.now();
+  }
+
+  return result;
+};
+
+MusicManager.prototype.autoplayNext = async function(guildId, player = this.getPlayer(guildId)) {
+  return reliableAutoplayNext(this, guildId, player);
+};
 
 if (!MusicManager.prototype.__deathReliablePlaybackPatch) {
   MusicManager.prototype.__deathReliablePlaybackPatch = true;
 
   MusicManager.prototype.search = async function(query, requester = null) {
     return reliableSearch(this, query, requester);
-  };
-
-  MusicManager.prototype.autoplayNext = async function(guildId, player = this.getPlayer(guildId)) {
-    return reliableAutoplayNext(this, guildId, player);
   };
 
   MusicManager.prototype.setupEvents = function() {
@@ -288,25 +252,20 @@ if (!MusicManager.prototype.__deathReliablePlaybackPatch) {
 
       const timer = setTimeout(async () => {
         this.__deathTransitionTimers.delete(guildId);
-
         const currentPlayer = this.getPlayer(guildId);
         const state = this.getState(guildId);
-
         if (!currentPlayer || !state.autoplay) return;
         if (currentPlayer.playing || currentPlayer.paused) return;
 
         try {
           const started = await this.autoplayNext(guildId, currentPlayer);
           console.log(`🔁 Track transition recovery result=${started} | guild=${guildId}`);
-
           if (!started && state.autoplay) {
             const retry = setTimeout(() => {
               this.__deathTransitionTimers.delete(guildId);
               const p = this.getPlayer(guildId);
               if (p && this.getState(guildId).autoplay && !p.playing && !p.paused) {
-                this.autoplayNext(guildId, p).catch(error =>
-                  console.warn("⚠️ Transition retry failed:", error?.message || error)
-                );
+                this.autoplayNext(guildId, p).catch(error => console.warn("⚠️ Transition retry failed:", error?.message || error));
               }
             }, 2500);
             this.__deathTransitionTimers.set(guildId, retry);
@@ -329,35 +288,14 @@ if (!MusicManager.prototype.__deathReliablePlaybackPatch) {
 
   MusicManager.prototype.ensure247 = async function(guildId = this.musicGuildId) {
     if (!guildId) return null;
-
     const state = this.getState(guildId);
     state.autoplay = true;
-
-    if (!state.autoplayContext) {
-      state.autoplayContext = {
-        query: "popular music 2026",
-        artist: "",
-        title: ""
-      };
-    }
-
     const player = await originalEnsure247.call(this, guildId);
-
-    if (!player) {
-      console.error("❌ 24/7 player was not created; startup music cannot begin.");
-      return null;
-    }
-
-    console.log("🔊 24/7 voice player connected. Checking reliable startup playback...");
-
-    if (!player.playing && !player.paused && !player.queue?.current && (player.queue?.length || 0) === 0) {
-      await forceStartupMusic(this, guildId, player);
-    }
-
+    if (!player) return null;
+    console.log("🔊 24/7 voice player connected. Reliable autoplay rotation is active.");
     await this.refreshPanel(guildId).catch(() => {});
-    console.log("🎵 Startup autoplay/panel sequence completed.");
     return player;
   };
 }
 
-console.log("🛠️ DEATH reliable yt-dlp playback + transition recovery patch loaded.");
+console.log("🛠️ DEATH autoplay rotation loaded: Hindi + English TikTok viral + Top English, with /play priority.");
