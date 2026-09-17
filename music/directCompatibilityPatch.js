@@ -4,9 +4,7 @@ const MusicManager = require("./DirectMusicManager");
 
 // index-direct.js owns the single ClientReady -> ensure247 startup path.
 // DirectMusicManager used to register a second legacy `ready` listener in its
-// constructor, which caused two simultaneous voice connections/startups and
-// could abort the autoplay startup sequence. Keep setupPlayerEvents as a
-// compatibility no-op; the recovery loop and index-direct startup handle it.
+// constructor, which caused duplicate voice startup and aborted autoplay.
 MusicManager.prototype.setupPlayerEvents = function setupPlayerEvents() {};
 
 MusicManager.prototype.skip = async function skip(guildId) {
@@ -43,4 +41,22 @@ MusicManager.prototype.reconnect = async function reconnect(guildId, voiceId) {
   if (connection && player) {
     try { connection.subscribe(player); } catch {}
   }
+};
+
+// A bot joining/disconnecting during startup emits transient VoiceStateUpdate
+// events. Only recover when the bot was actually in the permanent music
+// channel and then moved somewhere else (or disconnected from it).
+MusicManager.prototype.handleVoiceStateUpdate = async function handleVoiceStateUpdate(oldState, newState) {
+  if (newState.guild?.id !== this.musicGuildId) return;
+  if (newState.id !== this.client.user?.id) return;
+
+  const state = this.getState(newState.guild.id);
+  if (state.intentionalLeave) return;
+  if (newState.channelId === this.musicVoiceChannelId) return;
+  if (oldState.channelId !== this.musicVoiceChannelId) return;
+
+  console.warn("🟠 DEATH left the permanent music channel; reconnecting.");
+  await this.reconnect(newState.guild.id, this.musicVoiceChannelId).catch(error => {
+    console.warn("⚠️ Voice-state recovery failed:", error?.message || error);
+  });
 };
