@@ -3,21 +3,19 @@
 /*
  * DEATH Music 24/7 final startup guard.
  *
- * The production symptom was:
- *   player connects -> no track -> "Autoplay did not find a track"
- *   -> player later closes.
+ * Fixes the production symptom:
+ *   player connects -> no track -> autoplay fails -> player closes.
  *
- * This patch deliberately bypasses any ambiguous search-prefix handling
- * and uses Kazagumo's documented `source` search option. It also treats a
- * player with no current track and no queue as idle even if a stale
- * playing/paused flag is left behind after a voice reconnect.
+ * Uses Kazagumo's documented `source` search option instead of embedding
+ * search prefixes into the query, and recreates the permanent player after
+ * an unexpected playerClosed event.
  */
 
 const MusicManager = require("./MusicManager");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const originalAutoplayNext = MusicManager.prototype.autoplayNext;
 const originalEnsure247 = MusicManager.prototype.ensure247;
+const originalSetupEvents = MusicManager.prototype.setupEvents;
 
 const GROUPS = [
   {
@@ -75,8 +73,6 @@ async function finalAutoplay(manager, guildId, player) {
   const state = manager.getState(guildId);
   if (!state.autoplay || manager.autoplayBusy.has(guildId)) return false;
 
-  // A player with no track and no queued items is idle. Do not let a stale
-  // Kazagumo flag prevent startup after a voice reconnect.
   if (hasQueuedTrack(player)) {
     if (!player.playing && !player.paused) {
       await player.play().catch(error => console.warn("⚠️ Queue resume failed:", error?.message || error));
@@ -166,8 +162,6 @@ MusicManager.prototype.ensure247 = async function(guildId = this.musicGuildId) {
   const player = await originalEnsure247.call(this, guildId);
   if (!player) return null;
 
-  // If startup returned with an idle player, explicitly launch our final
-  // source-aware autoplay guard instead of waiting for another event.
   if (!hasQueuedTrack(player)) {
     const started = await finalAutoplay(this, guildId, player).catch(error => {
       console.error("❌ Final startup autoplay error:", error?.message || error);
@@ -179,14 +173,40 @@ MusicManager.prototype.ensure247 = async function(guildId = this.musicGuildId) {
   return player;
 };
 
-if (!MusicManager.prototype.__deathStartupAutoplayGuard) {
-  MusicManager.prototype.__deathStartupAutoplayGuard = true;
+/* Recover the permanent player when Kazagumo closes it unexpectedly. */
+MusicManager.prototype.setupEvents = function() {
+  originalSetupEvents.call(this);
 
-  // Recreate the permanent player after an unexpected close.
-  MusicManager.prototype.__deathStartupAutoplayGuardInstalled = true;
+  if (this.__deathFinalStartupEvents) return;
+  this.__deathFinalStartupEvents = true;
 
-  const kazagumo = MusicManager.prototype;
-  void kazagumo;
+  this.kazagumo.on("playerClosed", player => {
+    const guildId = player?.guildId;
+    if (!guildId || guildId !== this.musicGuildId) return;
 
-  console.log("🛡️ DEATH final startup autoplay guard loaded.");
-}
+    const state = this.getState(guildId);
+    if (!state.autoplay) return;
+
+    console.warn(`♻️ Permanent player closed unexpectedly; rebuilding | guild=${guildId}`);
+
+    try {
+      this.players.delete(guildId);
+    } catch {}
+
+    try {
+      if (typeof this.kazagumo.destroyPlayer === "function") {
+        this.kazagumo.destroyPlayer(guildId);
+      }
+    } catch {}
+
+    setTimeout(() => {
+      this.ensure247(guildId).catch(error => {
+        console.error("❌ Permanent player rebuild failed:", error?.message || error);
+      });
+    }, 2000);
+  });
+
+  console.log("🛡️ DEATH final startup autoplay + player rebuild guard loaded.");
+};
+
+console.log("🛡️ DEATH final startup autoplay guard loaded.");
