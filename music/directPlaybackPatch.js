@@ -2,7 +2,7 @@
 
 /* DEATH Music 24/7 — stable playback core.
  * Primary: parallel Invidious proxy playback (fresh server-side stream).
- * Secondary: yt-dlp direct with current PO-token support.
+ * Secondary: browser-backed yt-dlp PO-token playback.
  * Last resort: SoundCloud when the exact recording exists there.
  * Discord is only switched after real PCM bytes arrive.
  */
@@ -12,8 +12,7 @@ const { createAudioResource, StreamType } = require("@discordjs/voice");
 
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
-const POT_PROVIDER = process.env.YTDLP_POT_PROVIDER_URL || "http://bgutil-pot.railway.internal:4416";
-const STARTUP_MS = 6500;
+const STARTUP_MS = 9000;
 const PROVIDER_MS = 5000;
 const PCM_BUFFER = 1024 * 1024;
 
@@ -25,9 +24,7 @@ const INVIDIOUS = String(process.env.INVIDIOUS_API_URLS || [
   "https://invidious.f5.si",
   "https://yewtu.be",
   "https://yt.artemislena.eu",
-  "https://invidious.flokinet.to",
-  "https://invidious.privacydev.net",
-  "https://inv.tux.pizza"
+  "https://invidious.flokinet.to"
 ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean).slice(0, 8);
 
 const clean = v => String(v || "").replace(/\s+/g, " ").trim();
@@ -110,9 +107,13 @@ async function startYouTube(manager, guildId, track, startMs, token) {
   const state = manager.getState(guildId);
   const player = manager.players.get(guildId) || manager.ensurePlayer(guildId);
   manager.bindPlayerEvents(guildId, player);
-  const args = ["--no-warnings", "--no-progress", "--no-playlist", "--force-ipv4", "--js-runtimes", "deno", "--remote-components", "ejs:github",
-    "--extractor-args", "youtube:player_client=android_vr,web_embedded,mweb,web_safari,tv;fetch_pot=always;use_ad_playback_context=false",
-    "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_PROVIDER}`, "--retries", "1", "--fragment-retries", "1", "--format", "bestaudio/best", "--output", "-", track.url];
+  const args = [
+    "--no-warnings", "--no-progress", "--no-playlist", "--force-ipv4",
+    "--js-runtimes", "deno", "--remote-components", "ejs:github",
+    "--extractor-args", "youtube:player_client=web_safari,mweb,web_embedded,tv;fetch_pot=always;use_ad_playback_context=false",
+    "--extractor-args", "youtubepot-wpc:browser_path=/usr/bin/chromium",
+    "--retries", "1", "--fragment-retries", "1", "--format", "bestaudio/best", "--output", "-", track.url
+  ];
   const yt = spawn(YTDLP, args, { stdio: ["ignore", "pipe", "pipe"] });
   const ff = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", "-nostdin", "-i", "pipe:0", ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []), "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"], { stdio: ["pipe", "pipe", "pipe"] });
   const pcm = new PassThrough({ highWaterMark: PCM_BUFFER });
@@ -195,8 +196,6 @@ function install(Manager) {
     state.playbackToken = token; state.current = track; state.transitioning = true;
     const failures = [];
 
-    // Try the fastest proxy layer first, then direct YouTube, then SoundCloud.
-    // Only one source can own the Discord player at a time.
     try { await startInvidious(this, guildId, track, startMs, token); return true; }
     catch (e) { failures.push(`Invidious: ${errText(e?.message || e, 500)}`); }
     try { await startYouTube(this, guildId, track, startMs, token); return true; }
@@ -210,7 +209,7 @@ function install(Manager) {
     }
     throw new Error(`No playable music source was available. ${failures.join(" | ")}`);
   };
-  console.log("🎵 DEATH stable playback v6 loaded: proxy-first source handoff + real-PCM validation + fast recovery.");
+  console.log("🎵 DEATH stable playback v6 loaded: browser-backed YouTube PO tokens + proxy-first source handoff + real-PCM validation.");
 }
 try { install(require("./DirectMusicManager")); } catch (e) { console.error("❌ Stable playback patch failed to load:", e?.message || e); }
 module.exports = { install };
