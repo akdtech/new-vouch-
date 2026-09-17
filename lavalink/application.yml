@@ -35,9 +35,6 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
 
-    # Keep the playback clients that are currently documented as playback-capable.
-    # Avoid MWEB/WEBEMBEDDED here because the Railway logs show MWEB HTTP 403
-    # and WEB_EMBEDDED_PLAYER playback configuration failures.
     clients:
       - ANDROID_MUSIC
       - ANDROID_VR
@@ -80,7 +77,7 @@ plugins:
     providers:
       - "ytmsearch:%QUERY%"
       - "ytsearch:%QUERY%"
-      - "scsearch:%QUERY%"
+      - "ytdlpsearch:%QUERY%"
 
     sources:
       youtube: false
@@ -92,8 +89,24 @@ plugins:
       vkmusic: false
       tidal: false
       qobuz: false
-      ytdlp: false
+      ytdlp: true
       jiosaavn: false
+
+    ytdlp:
+      path: "yt-dlp"
+      searchLimit: 10
+      customLoadArgs:
+        - "-q"
+        - "--no-warnings"
+        - "--flat-playlist"
+        - "--skip-download"
+        - "-J"
+      customPlaybackArgs:
+        - "-q"
+        - "--no-warnings"
+        - "-f"
+        - "bestaudio"
+        - "-J"
 
 metrics:
   prometheus:
