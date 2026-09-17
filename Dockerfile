@@ -32,5 +32,6 @@ COPY . .
 
 EXPOSE 3000
 
-# Complete direct-music fallback chain: Invidious -> Piped -> yt-dlp/PO-token.
-CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directInvidiousFallbackPatch.js", "-r", "./music/directPipedFallbackPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
+# Production chain: Invidious first -> direct yt-dlp/PO-token -> Piped fallback.
+# Invidious is loaded AFTER directPlayback so it can wrap the complete playback chain.
+CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directInvidiousFallbackPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
