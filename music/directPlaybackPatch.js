@@ -5,6 +5,7 @@ const { createAudioResource, StreamType, AudioPlayerStatus } = require("@discord
 
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
+const POT_PROVIDER = process.env.YTDLP_POT_PROVIDER_URL || "http://bgutil-pot.railway.internal:4416";
 
 function installDirectPlaybackPatch(DirectMusicManager) {
   if (!DirectMusicManager || DirectMusicManager.prototype.__deathDirectPlaybackPatched) return;
@@ -22,9 +23,10 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     state.paused = false;
     state.audioResource = null;
 
-    // YouTube can reject one player client while another still provides a
-    // normal playable stream. Never depend on web_embedded alone.
-    const clientProfiles = ["tv", "android_vr", "ios", "default"];
+    // YouTube is currently enforcing anti-bot checks on many Railway IPs.
+    // Use the fresh BgUtils PO-token provider with mweb first, then retain
+    // several client fallbacks for videos with client-specific restrictions.
+    const clientProfiles = ["mweb", "tv", "android_vr", "default"];
     const failures = [];
 
     for (const client of clientProfiles) {
@@ -38,7 +40,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             "--force-ipv4",
             "--js-runtimes", "deno",
             "--remote-components", "ejs:github",
-            "--extractor-args", `youtube:player_client=${client}`,
+            "--extractor-args", `youtube:player_client=${client};youtubepot-bgutilhttp:base_url=${POT_PROVIDER}`,
             "--retries", "3",
             "--fragment-retries", "3",
             "--retry-sleep", "linear=1::2",
@@ -106,17 +108,14 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             gotYtBytes = true;
           });
 
-          // The previous implementation treated yt-dlp bytes as playback
-          // success. That allowed FFmpeg to die immediately and its closed
-          // stdin then emitted EPIPE into Node. Only declare success after
-          // FFmpeg has produced actual PCM audio for Discord.
+          // Only declare success after FFmpeg has produced actual PCM audio.
           ff.stdout.on("data", () => {
             gotPcmBytes = true;
             if (!settled) success();
           });
 
-          // A normal stream can end after FFmpeg has already produced PCM.
-          // Ignore the expected closed-pipe write instead of crashing Node.
+          // FFmpeg can close its stdin while yt-dlp is still flushing bytes.
+          // EPIPE is expected during teardown and must never become uncaught.
           ff.stdin.on("error", error => {
             if (error?.code !== "EPIPE") {
               console.warn(`⚠️ FFmpeg stdin error (${client}): ${error?.message || error}`);
@@ -191,7 +190,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     throw new Error(`No playable YouTube stream was produced. ${failures.join(" || ")}`);
   };
 
-  console.log("🛠️ DEATH direct playback patch loaded: resilient yt-dlp → FFmpeg → Discord PCM pipeline.");
+  console.log("🛠️ DEATH direct playback patch loaded: BgUtils PO-token YouTube + resilient FFmpeg PCM pipeline.");
 }
 
 try {
