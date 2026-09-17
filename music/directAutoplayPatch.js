@@ -9,7 +9,7 @@ const AUTOPLAY_BLOCK_MS = 15 * 60 * 1000;
 const BAD_TITLE = /\b(\d+\s*(?:hour|hr)s?|hour\s*mix|\bmix\b|playlist|compilation|continuous|nonstop|radio|medley|full\s*album|album|collection|lofi\s*mix|sleep\s*music|long\s*version)\b/i;
 const STOP_WORDS = new Set(["the","a","an","and","or","of","to","for","in","on","at","with","from","is","it","my","your","me","you","official","video","audio","music","song","songs","lyrics","lyric","remix","edit","version","full","hd","4k","feat","ft"]);
 
-function clean(value){return String(value||"").replace(/\s+/g," ").trim();}
+function clean(value){return String(value || "").replace(/\s+/g," ").trim();}
 function artistIsUseful(artist){const v=clean(artist).toLowerCase();return v&&!['unknown artist','various artists','various','youtube','youtube music','topic','unknown'].includes(v);}
 function words(value){return clean(value).toLowerCase().replace(/[^a-z0-9\s]/gi," ").split(/\s+/).filter(w=>w.length>=3&&!STOP_WORDS.has(w));}
 function artistMatches(a,b){const l=clean(a).toLowerCase(),r=clean(b).toLowerCase();return !!l&&!!r&&(l===r||l.includes(r)||r.includes(l));}
@@ -32,20 +32,29 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
   const state=this.getState(guildId),player=this.players.get(guildId);
   if(!player||!state.autoplay||state.intentionalLeave||state.autoplayBusy)return false;
   if(state.current||state.queue.length)return false;
-  if(Number(state.autoplayBlockedUntil||0)>Date.now()){
-    // Recovery may call autoplay repeatedly. Stay quiet during the block window
-    // instead of filling Railway logs with identical messages every few seconds.
-    return false;
-  }
+  if(Number(state.autoplayBlockedUntil||0)>Date.now())return false;
   state.autoplayBusy=true;
   try{
-    const context=state.autoplayContext||{},recent=Array.isArray(state.recent)?state.recent:[],artist=clean(context.artist),contextWords=Array.isArray(context.words)?context.words:words(`${context.title} ${context.query}`);
+    const context=state.autoplayContext||{},recent=Array.isArray(state.recent)?state.recent:[];
+    const artist=clean(context.artist);
+    const contextTitle=clean(context.title);
+    const contextQuery=clean(context.query);
+    const contextWords=Array.isArray(context.words)&&context.words.length ? context.words : words(`${contextTitle} ${contextQuery}`);
     const queries=[];
-    if(artist){queries.push(`${artist} songs`);if(contextWords.length)queries.push(`${artist} ${contextWords.slice(0,2).join(" ")} songs`);}
-    if(contextWords.length){queries.push(`${contextWords.slice(0,3).join(" ")} songs`);if(context.query)queries.push(`${context.query} similar songs`);}
-    if(!queries.length)queries.push("popular songs");
+
+    if(artist){
+      queries.push(`${artist} songs`);
+      if(contextWords.length)queries.push(`${artist} ${contextWords.slice(0,2).join(" ")} songs`);
+    }
+    if(contextWords.length){
+      queries.push(`${contextWords.slice(0,3).join(" ")} songs`);
+      if(contextQuery)queries.push(`${contextQuery} similar songs`);
+    }
+    if(!queries.length)queries.push("popular songs 2026");
+
     let chosen=null,chosenScore=-Infinity;
     for(const query of [...new Set(queries)]){
+      if(/\bundefined\b|\bnull\b/i.test(query))continue;
       try{
         const result=await this.search(query,this.client.user);
         const candidates=(result?.tracks||[]).filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track))).map(track=>({track,score:candidateScore(track,{artist,words:contextWords},recent)})).sort((a,b)=>b.score-a.score);
@@ -53,19 +62,25 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
         const topScore=candidates[0].score,top=candidates.filter(item=>item.score>=topScore-15).slice(0,5),picked=top[Math.floor(Math.random()*top.length)];
         if(picked&&picked.score>chosenScore){chosen=picked.track;chosenScore=picked.score;}
         if(chosen&&chosenScore>=150)break;
-      }catch(error){console.warn(`⚠️ Context autoplay search failed: ${query} — ${error?.message||error}`);}
+      }catch(error){
+        if(isYoutubeBotBlock(error))throw error;
+        console.warn(`⚠️ Context autoplay search failed: ${query} — ${error?.message||error}`);
+      }
     }
-    if(!chosen){const fallback=await this.search("popular songs",this.client.user).catch(()=>null);chosen=(fallback?.tracks||[]).filter(isAutoplayCandidate).find(track=>!recent.includes(trackId(track)))||null;}
+
+    if(!chosen){
+      const fallback=await this.search("popular songs 2026",this.client.user).catch(error=>{if(isYoutubeBotBlock(error))throw error;return null;});
+      chosen=(fallback?.tracks||[]).filter(isAutoplayCandidate).find(track=>!recent.includes(trackId(track)))||null;
+    }
     if(!chosen||!isAutoplayCandidate(chosen)){console.warn("⚠️ No short individual autoplay track found; refusing long-track fallback.");return false;}
 
     const id=trackId(chosen);if(id)state.recent=[...recent,id].slice(-20);
-    chosen.isAutoplay=true;chosen.autoplayGroup=artist?`Same artist / related: ${artist}`:"Related search / genre";state.current=chosen;
-
+    chosen.isAutoplay=true;chosen.autoplayGroup=artist?`Same artist / related: ${artist}`:"Related search / genre";
     const chosenArtist=clean(chosen.author||chosen.uploader);
     state.autoplayContext={
       artist:artistIsUseful(chosenArtist)?chosenArtist:artist,
       title:clean(chosen.title),
-      query:clean(context.query||chosen.title),
+      query:contextQuery||clean(chosen.title),
       words:[...new Set([...(contextWords||[]),...words(chosen.title)])].slice(0,10)
     };
 
@@ -83,7 +98,7 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
     console.error("❌ Context autoplay error:",error?.message||error);
     state.current=null;
     return false;
-  } finally{state.autoplayBusy=false;}
+  }finally{state.autoplayBusy=false;}
 };
 
-console.log("🎯 DEATH smart autoplay loaded: related songs + hard 8-minute maximum + artist/genre chaining + YouTube bot-check backoff.");
+console.log("🎯 DEATH smart autoplay loaded: related songs + hard 8-minute maximum + artist/genre chaining + safe autoplay query handling.");
