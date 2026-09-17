@@ -4,7 +4,7 @@
   "description": "DEATH × GMAO all-in-one Discord community bot with 24/7 music, moderation, security and utilities.",
   "main": "index.js",
   "scripts": {
-    "start": "node -r ./music/musicRuntimePatch.js -r ./music/voiceRuntimePatch.js index.js",
+    "start": "node -r ./music/musicRuntimePatch.js -r ./music/voiceRuntimePatch.js -r ./music/startupAutoplayPatch.js index.js",
     "deploy": "node deploy-commands.js"
   },
   "engines": {
