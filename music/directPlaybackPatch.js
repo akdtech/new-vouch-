@@ -10,8 +10,6 @@ function installDirectPlaybackPatch(DirectMusicManager) {
   if (!DirectMusicManager || DirectMusicManager.prototype.__deathDirectPlaybackPatched) return;
   DirectMusicManager.prototype.__deathDirectPlaybackPatched = true;
 
-  // Keep the YouTube stream and FFmpeg pipeline alive; do not extract a
-  // separate signed media URL that can expire/403 on Railway.
   DirectMusicManager.prototype.startTrack = async function (guildId, track, startMs = 0) {
     const state = this.getState(guildId);
     const player = this.players.get(guildId) || this.ensurePlayer(guildId);
@@ -24,7 +22,9 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     state.paused = false;
     state.audioResource = null;
 
-    const clientProfiles = ["web_embedded", "default"];
+    // YouTube can reject one player client while another still provides a
+    // normal playable stream. Never depend on web_embedded alone.
+    const clientProfiles = ["tv", "android_vr", "ios", "default"];
     const failures = [];
 
     for (const client of clientProfiles) {
@@ -35,11 +35,12 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             "--no-warnings",
             "--no-progress",
             "--no-playlist",
+            "--force-ipv4",
             "--js-runtimes", "deno",
             "--remote-components", "ejs:github",
             "--extractor-args", `youtube:player_client=${client}`,
-            "--retries", "5",
-            "--fragment-retries", "5",
+            "--retries", "3",
+            "--fragment-retries", "3",
             "--retry-sleep", "linear=1::2",
             "--format", "bestaudio/best",
             "--output", "-",
@@ -50,6 +51,9 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           const ffArgs = [
             "-hide_banner",
             "-loglevel", "warning",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
             "-i", "pipe:0",
             ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
             "-vn",
@@ -102,7 +106,6 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           });
 
           yt.stdout.pipe(ff.stdin);
-
           yt.on("error", error => fail(error));
           ff.on("error", error => fail(error));
 
@@ -111,9 +114,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
               const detail = ytStderr.trim().split(/\r?\n/).filter(Boolean).slice(-6).join(" | ");
               return fail(new Error(`yt-dlp ${client} exited with code ${code}: ${detail}`.trim()));
             }
-            if (code !== 0) {
-              console.warn(`⚠️ yt-dlp ${client} ended with code ${code} after audio started.`);
-            }
+            if (code !== 0) console.warn(`⚠️ yt-dlp ${client} ended with code ${code} after audio started.`);
           });
 
           ff.on("close", code => {
@@ -134,7 +135,6 @@ function installDirectPlaybackPatch(DirectMusicManager) {
 
         const { yt, ff } = result;
         this.streams.set(guildId, { yt, ff });
-
         const resource = createAudioResource(ff.stdout, {
           inputType: StreamType.Raw,
           inlineVolume: true,
@@ -143,8 +143,6 @@ function installDirectPlaybackPatch(DirectMusicManager) {
         resource.volume?.setVolume(Math.max(0.01, state.volume / 100));
         state.audioResource = resource;
         player.play(resource);
-
-        // Panel refresh must never delay playback/control interactions.
         Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
         console.log(`▶️ Direct playback started: ${track.title}`);
         console.log(`🔊 Direct audio resource status: ${player.state.status}`);
@@ -164,7 +162,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     throw new Error(`No playable YouTube stream was produced. ${failures.join(" || ")}`);
   };
 
-  console.log("🛠️ DEATH direct playback patch loaded: yt-dlp native streaming -> FFmpeg -> Discord.");
+  console.log("🛠️ DEATH direct playback patch loaded: multi-client YouTube fallback + FFmpeg reconnect.");
 }
 
 try {
