@@ -35,8 +35,6 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
       if (!channel) throw new Error("Music panel channel is not available.");
 
       const player = this.players.get(guildId);
-      // The AudioResource is authoritative once buffering/playing has begun.
-      // This prevents the panel from showing an older state.current value.
       const liveTrack = player?.state?.resource?.metadata;
       const current = liveTrack || state.current;
       if (liveTrack && liveTrack !== state.current) state.current = liveTrack;
@@ -72,7 +70,6 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
         .setFooter({ text: "DEATH × GMAO  •  24/7 Music  •  Made by DEATH" })
         .setTimestamp();
 
-      // Use the actual YouTube track artwork as the large banner.
       if (current?.thumbnail && /^https?:\/\//i.test(current.thumbnail)) {
         try { embed.setImage(current.thumbnail); } catch {}
       }
@@ -102,9 +99,11 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
           ? [...messages.values()].filter(m => {
               if (m.author?.id !== this.client.user.id) return false;
               const title = clean(m.embeds?.[0]?.title);
+              const author = clean(m.embeds?.[0]?.author?.name);
               const titleMatch = /DEATH\s+MUSIC\s*[•·-]?\s*24\/7/i.test(title) || /DEATH\s+Music\s+24\/7/i.test(title);
+              const authorMatch = /DEATH\s+MUSIC\s+24\/7/i.test(author);
               const componentMatch = m.components?.some(row => row.components?.some(component => String(component.customId || "").startsWith("death_music_")));
-              return titleMatch || componentMatch;
+              return titleMatch || authorMatch || componentMatch;
             })
           : [];
 
@@ -126,15 +125,10 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
         state.panelChannelId = channel.id;
       }
 
-      // Discord has no native "stick to bottom" message. Pinning gives the
-      // panel a permanent home and keeps it accessible even after new chat.
+      // Pin when Discord permits it. Some channel types cannot be pinned;
+      // the one-message system below remains persistent even in those channels.
       if (message && !message.pinned) {
-        await message.pin("DEATH Music 24/7 persistent control panel").catch(error => {
-          if (!state.panelPinWarningShown) {
-            state.panelPinWarningShown = true;
-            console.warn(`⚠️ Could not pin music panel (grant Pin Messages/Manage Messages): ${error?.message || error}`);
-          }
-        });
+        await message.pin("DEATH Music 24/7 persistent control panel").catch(() => {});
       }
       return message;
     };
@@ -147,5 +141,18 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     return state.panelEditPromise;
   };
 
-  console.log("🎨 DEATH rich sticky panel loaded: one pinned message + live track artwork + 7 focused controls.");
+  // IMPORTANT: DirectMusicManager.refreshPanel used to rebuild the old 11-button
+  // panel through buildPanelPayload(). Route every refresh through this single
+  // rich-panel renderer so the old panel can never come back.
+  MusicManager.prototype.refreshPanel = async function deathRichRefreshPanel(guildId) {
+    try {
+      await this.ensurePanel(guildId);
+      return true;
+    } catch (error) {
+      console.warn(`⚠️ Rich music panel refresh failed: ${error?.message || error}`);
+      return false;
+    }
+  };
+
+  console.log("🎨 DEATH rich sticky panel loaded: ONE live message + artwork + 7 focused controls.");
 }
