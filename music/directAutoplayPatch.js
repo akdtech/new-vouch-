@@ -15,6 +15,12 @@ const PIPED_SEARCH_INSTANCES = String(process.env.PIPED_API_URLS || [
   "https://pipedapi.darkness.services",
   "https://pipedapi.owo.si"
 ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
+const SAFE_AUTOPLAY_SEEDS = [
+  "Alan Walker Faded official audio",
+  "The Weeknd Blinding Lights official audio",
+  "Ed Sheeran Shape of You official audio",
+  "Arijit Singh Kesariya official audio"
+];
 
 const BAD_TITLE = /\b(\d+\s*(?:hour|hr)s?|hour\s*mix|\bmix\b|playlist|compilation|continuous|nonstop|radio|medley|full\s*album|album|collection|lofi\s*mix|sleep\s*music|long\s*version)\b/i;
 const STOP_WORDS = new Set(["the","a","an","and","or","of","to","for","in","on","at","with","from","is","it","my","your","me","you","official","video","audio","music","song","songs","lyrics","lyric","remix","edit","version","full","hd","4k","feat","ft"]);
@@ -115,9 +121,6 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
 
       let candidates=tracks.filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track))).map(track=>({track,score:candidateScore(track,{artist,words:contextWords},recent)})).sort((a,b)=>b.score-a.score);
 
-      // If the normal search returned compilations/mixes or unusable durations,
-      // immediately ask Piped's music search for individual tracks instead of
-      // waiting through more serial YouTube attempts.
       if(!candidates.length){
         const pipedTracks=await pipedSearch(query,this.client.user);
         candidates=pipedTracks.filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track))).map(track=>({track,score:candidateScore(track,{artist,words:contextWords},recent)})).sort((a,b)=>b.score-a.score);
@@ -133,6 +136,18 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
       const pipedFallback=await pipedSearch("popular songs 2026 official audio",this.client.user);
       chosen=pipedFallback.filter(isAutoplayCandidate).find(track=>!recent.includes(trackId(track)))||null;
     }
+
+    // Final startup/recovery safety net: use known individual-song queries,
+    // never a mix/album/playlist, so autoplay can actually start after a
+    // clean Railway restart even when public search engines return junk.
+    if(!chosen){
+      for(const seed of SAFE_AUTOPLAY_SEEDS){
+        const seedTracks=await pipedSearch(seed,this.client.user);
+        const candidate=seedTracks.filter(isAutoplayCandidate).find(track=>!recent.includes(trackId(track)));
+        if(candidate){chosen=candidate;break;}
+      }
+    }
+
     if(!chosen||!isAutoplayCandidate(chosen)){console.warn("⚠️ No short individual autoplay track found; keeping autoplay armed for the next recovery cycle.");return false;}
 
     const id=trackId(chosen);if(id)state.recent=[...recent,id].slice(-20);
@@ -162,4 +177,4 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
   }finally{state.autoplayBusy=false;}
 };
 
-console.log("🎯 DEATH smart autoplay loaded: related songs + hard 8-minute maximum + artist/genre chaining + Piped individual-track fallback.");
+console.log("🎯 DEATH smart autoplay loaded: related songs + hard 8-minute maximum + artist/genre chaining + Piped individual-track fallback + safe startup seeds.");
