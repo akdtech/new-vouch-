@@ -21,6 +21,7 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
     const player = this.players.get(guildId);
     if (!player) throw new Error("Music player is not active.");
     if (player.state.status === AudioPlayerStatus.Paused) return;
+    if (player.state.status === AudioPlayerStatus.Idle && !this.getState(guildId).current) return;
     player.pause(true);
     const state = this.getState(guildId);
     state.positionOffset = this.getPosition(guildId);
@@ -31,8 +32,21 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
   MusicManager.prototype.resume = async function fastResume(guildId) {
     const player = this.players.get(guildId);
     if (!player) throw new Error("Music player is not active.");
-    player.unpause();
     const state = this.getState(guildId);
+
+    // Play is also a recovery button. If a source just failed and the player
+    // is idle, immediately arm the normal autoplay/source recovery path.
+    if (!state.current && state.autoplay && !state.intentionalLeave) {
+      state.transitioning = true;
+      Promise.resolve(this.autoplayNext(guildId)).catch(error => {
+        state.transitioning = false;
+        console.warn(`⚠️ Play-button recovery failed: ${error?.message || error}`);
+      });
+      return;
+    }
+
+    if (player.state.status !== AudioPlayerStatus.Paused && !state.current) return;
+    player.unpause();
     state.startedAt = Date.now();
     state.paused = false;
     Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
@@ -43,8 +57,6 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
     const player = this.players.get(guildId);
     if (state.transitioning) return;
 
-    // The resource metadata is the source of truth for what Discord is
-    // actually playing. This prevents skipping a stale state.current track.
     const resourceTrack = player?.state?.resource?.metadata || null;
     const ended = resourceTrack || state.current || null;
 
@@ -59,16 +71,20 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
         Promise.resolve(this.startTrack(guildId, next)).catch(error => {
           state.transitioning = false;
           console.warn(`⚠️ Skip recovery failed: ${error?.message || error}`);
+          if (state.autoplay && !state.intentionalLeave) Promise.resolve(this.autoplayNext(guildId)).catch(() => {});
         });
         return;
       }
       if (state.autoplay && !state.intentionalLeave) {
-        Promise.resolve(this.autoplayNext(guildId)).catch(error =>
-          console.warn(`⚠️ Skip autoplay recovery failed: ${error?.message || error}`)
-        );
+        state.transitioning = true;
+        Promise.resolve(this.autoplayNext(guildId)).catch(error => {
+          state.transitioning = false;
+          console.warn(`⚠️ Skip autoplay recovery failed: ${error?.message || error}`);
+        });
         return;
       }
-      throw new Error("Nothing is playing.");
+      Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
+      return;
     }
 
     state.transitioning = true;
@@ -90,7 +106,8 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
         state.transitioning = false;
         console.warn(`⚠️ Fast skip next track failed: ${error?.message || error}`);
         if (state.autoplay && !state.intentionalLeave) {
-          Promise.resolve(this.autoplayNext(guildId)).catch(() => {});
+          state.transitioning = true;
+          Promise.resolve(this.autoplayNext(guildId)).catch(() => { state.transitioning = false; });
         }
       });
     } else if (state.autoplay && !state.intentionalLeave) {
@@ -155,5 +172,5 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
     await this.startTrack(guildId, state.current, target);
   };
 
-  console.log("⚡ DEATH instant controls loaded: live-resource skip + background transitions + live panel updates.");
+  console.log("⚡ DEATH instant controls loaded: live-resource skip + background transitions + live panel updates + recovery buttons.");
 }
