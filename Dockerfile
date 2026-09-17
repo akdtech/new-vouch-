@@ -32,5 +32,5 @@ COPY . .
 
 EXPOSE 3000
 
-# Complete direct-music patch chain: YouTube -> Piped fallback -> yt-dlp fallback.
-CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directPipedFallbackPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
+# Complete direct-music fallback chain: Invidious -> Piped -> yt-dlp/PO-token.
+CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directInvidiousFallbackPatch.js", "-r", "./music/directPipedFallbackPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
