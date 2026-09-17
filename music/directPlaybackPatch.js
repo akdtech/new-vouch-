@@ -51,6 +51,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           const ffArgs = [
             "-hide_banner",
             "-loglevel", "warning",
+            "-nostdin",
             "-reconnect", "1",
             "-reconnect_streamed", "1",
             "-reconnect_delay_max", "5",
@@ -67,7 +68,8 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           let ytStderr = "";
           let ffStderr = "";
           let settled = false;
-          let gotAudio = false;
+          let gotYtBytes = false;
+          let gotPcmBytes = false;
           let firstBytesTimer = null;
 
           const cleanup = () => {
@@ -101,8 +103,31 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           });
 
           yt.stdout.on("data", () => {
-            gotAudio = true;
+            gotYtBytes = true;
+          });
+
+          // The previous implementation treated yt-dlp bytes as playback
+          // success. That allowed FFmpeg to die immediately and its closed
+          // stdin then emitted EPIPE into Node. Only declare success after
+          // FFmpeg has produced actual PCM audio for Discord.
+          ff.stdout.on("data", () => {
+            gotPcmBytes = true;
             if (!settled) success();
+          });
+
+          // A normal stream can end after FFmpeg has already produced PCM.
+          // Ignore the expected closed-pipe write instead of crashing Node.
+          ff.stdin.on("error", error => {
+            if (error?.code !== "EPIPE") {
+              console.warn(`⚠️ FFmpeg stdin error (${client}): ${error?.message || error}`);
+            }
+          });
+
+          yt.stdout.on("error", error => {
+            if (error?.code !== "EPIPE") fail(error);
+          });
+          ff.stdout.on("error", error => {
+            if (error?.code !== "EPIPE") fail(error);
           });
 
           yt.stdout.pipe(ff.stdin);
@@ -110,25 +135,29 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           ff.on("error", error => fail(error));
 
           yt.on("close", code => {
-            if (code !== 0 && !gotAudio) {
+            if (code !== 0 && !gotYtBytes && !gotPcmBytes) {
               const detail = ytStderr.trim().split(/\r?\n/).filter(Boolean).slice(-6).join(" | ");
               return fail(new Error(`yt-dlp ${client} exited with code ${code}: ${detail}`.trim()));
             }
-            if (code !== 0) console.warn(`⚠️ yt-dlp ${client} ended with code ${code} after audio started.`);
+            if (code !== 0 && !gotPcmBytes) {
+              console.warn(`⚠️ yt-dlp ${client} ended with code ${code} before FFmpeg produced PCM.`);
+            }
           });
 
           ff.on("close", code => {
-            if (code !== 0 && !gotAudio) {
-              const detail = ffStderr.trim().split(/\r?\n/).filter(Boolean).slice(-4).join(" | ");
-              fail(new Error(`FFmpeg ${client} exited with code ${code}: ${detail}`.trim()));
+            if (!gotPcmBytes) {
+              const detail = ffStderr.trim().split(/\r?\n/).filter(Boolean).slice(-6).join(" | ");
+              return fail(new Error(`FFmpeg ${client} exited with code ${code}: ${detail}`.trim()));
             }
           });
 
           firstBytesTimer = setTimeout(() => {
-            if (gotAudio || player.state.status === AudioPlayerStatus.Buffering || player.state.status === AudioPlayerStatus.Playing) {
+            if (gotPcmBytes || player.state.status === AudioPlayerStatus.Buffering || player.state.status === AudioPlayerStatus.Playing) {
               success();
             } else {
-              fail(new Error(`No audio bytes received from yt-dlp client ${client} within 8 seconds.`));
+              const ytDetail = ytStderr.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
+              const ffDetail = ffStderr.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
+              fail(new Error(`No PCM audio received from FFmpeg client ${client} within 8 seconds. yt-dlp=${ytDetail || "none"}; ffmpeg=${ffDetail || "none"}`));
             }
           }, 8000);
         });
@@ -162,7 +191,7 @@ function installDirectPlaybackPatch(DirectMusicManager) {
     throw new Error(`No playable YouTube stream was produced. ${failures.join(" || ")}`);
   };
 
-  console.log("🛠️ DEATH direct playback patch loaded: multi-client YouTube fallback + FFmpeg reconnect.");
+  console.log("🛠️ DEATH direct playback patch loaded: resilient yt-dlp → FFmpeg → Discord PCM pipeline.");
 }
 
 try {
