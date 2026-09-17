@@ -73,10 +73,9 @@ function installDirectPlaybackPatch(DirectMusicManager) {
             "pipe:1"
           ], { stdio: ["pipe", "pipe", "pipe"] });
 
-          // IMPORTANT: yt-dlp/FFmpeg may produce PCM before the Discord
-          // AudioResource is attached. A PassThrough keeps those first audio
-          // bytes buffered instead of losing them, which was causing the bot
-          // to report "started" while Discord received silence.
+          // Keep FFmpeg PCM in a paused PassThrough until the AudioResource is
+          // attached. Reading PCM with a `data` listener here would switch the
+          // PassThrough into flowing mode and lose the startup audio.
           const pcm = new PassThrough({ highWaterMark: PCM_BUFFER_BYTES });
           ff.stdout.pipe(pcm);
 
@@ -122,7 +121,9 @@ function installDirectPlaybackPatch(DirectMusicManager) {
           yt.stdout.on("data", chunk => {
             if (chunk?.length) gotYtBytes = true;
           });
-          pcm.on("data", chunk => {
+          // Detect PCM on ff.stdout while it is being piped into the paused
+          // PassThrough. This observes the bytes without draining the buffer.
+          ff.stdout.on("data", chunk => {
             if (chunk?.length) {
               gotPcmBytes = true;
               if (!settled) success();
@@ -177,8 +178,6 @@ function installDirectPlaybackPatch(DirectMusicManager) {
         const { yt, ff, pcm } = result;
         this.streams.set(guildId, { yt, ff, pcm });
 
-        // The resource is created from the buffered PassThrough, not directly
-        // from ff.stdout, so no PCM is lost during the startup handshake.
         const resource = createAudioResource(pcm, {
           inputType: StreamType.Raw,
           inlineVolume: true,
