@@ -1,6 +1,6 @@
 "use strict";
 
-/* DEATH Music 24/7 — one persistent, live-synced player UI. */
+/* DEATH Music 24/7 — one persistent, pinned, live-synced player UI. */
 const MusicManager = require("./DirectMusicManager");
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { AudioPlayerStatus } = require("@discordjs/voice");
@@ -26,19 +26,6 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
   const button = (id, label, emoji, style = ButtonStyle.Secondary, disabled = false) =>
     new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(disabled);
 
-  const isDeathPanel = message => {
-    if (!message?.author?.id) return false;
-    const title = clean(message.embeds?.[0]?.title);
-    const titleMatch = /DEATH\s+MUSIC\s*[•·-]?\s*24\/7/i.test(title) || /DEATH\s+Music\s+24\/7/i.test(title);
-    const componentMatch = message.components?.some(row =>
-      row.components?.some(component => String(component.customId || "").startsWith("death_music_"))
-    );
-    return message.author.id === thisClientId(message) && (titleMatch || componentMatch);
-  };
-
-  // Kept separate so isDeathPanel can safely compare against the current bot.
-  const thisClientId = message => message?.client?.user?.id || message?.author?.client?.user?.id || null;
-
   MusicManager.prototype.ensurePanel = async function stickyEnsurePanel(guildId) {
     const state = this.getState(guildId);
     if (state.panelEditPromise) return state.panelEditPromise;
@@ -47,9 +34,15 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
       const channel = await this.findPanelChannel(guildId);
       if (!channel) throw new Error("Music panel channel is not available.");
 
-      const current = state.current;
       const player = this.players.get(guildId);
+      // The AudioResource is authoritative once buffering/playing has begun.
+      // This prevents the panel from showing an older state.current value.
+      const liveTrack = player?.state?.resource?.metadata;
+      const current = liveTrack || state.current;
+      if (liveTrack && liveTrack !== state.current) state.current = liveTrack;
+
       const playing = Boolean(current && player?.state.status === AudioPlayerStatus.Playing && !state.paused);
+      const buffering = Boolean(current && player?.state.status === AudioPlayerStatus.Buffering);
       const paused = Boolean(current && (state.paused || player?.state.status === AudioPlayerStatus.Paused));
       const queued = state.queue.length;
       const volume = Number(state.volume || this.defaultVolume);
@@ -59,25 +52,29 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
       const author = clean(current?.author || current?.uploader) || "DEATH Music 24/7";
       const auto = Boolean(state.autoplay);
       const mode = current?.isAutoplay ? "♾️ Related autoplay" : "🎧 Manual selection";
+      const status = paused ? "⏸️ Paused" : playing ? "▶️ Playing" : buffering ? "⏳ Buffering" : state.transitioning ? "⏳ Loading" : "⏹️ Ready";
 
       const embed = new EmbedBuilder()
-        .setTitle("💀 DEATH MUSIC • 24/7")
+        .setColor(0x6C5CE7)
+        .setAuthor({ name: "💀 DEATH MUSIC 24/7", iconURL: this.client.user.displayAvatarURL() })
+        .setTitle(title)
         .setDescription(
-          `### ${title}\n` +
           `🎤 **${author}**\n` +
           `> ${mode}\n\n` +
           `\`${bar(position, duration)}\`\n` +
-          `\`${format(position)}\` / \`${format(duration)}\`  •  ${paused ? "⏸️ Paused" : playing ? "▶️ Playing" : state.transitioning ? "⏳ Loading" : "⏹️ Ready"}`
+          `\`${format(position)}\` / \`${format(duration)}\`  •  **${status}**`
         )
         .addFields(
           { name: "🔊 Volume", value: `**${volume}%**`, inline: true },
           { name: "📜 Queue", value: `**${queued}**`, inline: true },
           { name: "♾️ Autoplay", value: auto ? "**ON**" : "OFF", inline: true }
         )
-        .setFooter({ text: "DEATH × GMAO  •  Music 24/7  •  Made by DEATH" });
+        .setFooter({ text: "DEATH × GMAO  •  24/7 Music  •  Made by DEATH" })
+        .setTimestamp();
 
+      // Use the actual YouTube track artwork as the large banner.
       if (current?.thumbnail && /^https?:\/\//i.test(current.thumbnail)) {
-        try { embed.setThumbnail(current.thumbnail); } catch {}
+        try { embed.setImage(current.thumbnail); } catch {}
       }
 
       const row1 = new ActionRowBuilder().addComponents(
@@ -128,6 +125,17 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
         state.panelMessageId = message.id;
         state.panelChannelId = channel.id;
       }
+
+      // Discord has no native "stick to bottom" message. Pinning gives the
+      // panel a permanent home and keeps it accessible even after new chat.
+      if (message && !message.pinned) {
+        await message.pin("DEATH Music 24/7 persistent control panel").catch(error => {
+          if (!state.panelPinWarningShown) {
+            state.panelPinWarningShown = true;
+            console.warn(`⚠️ Could not pin music panel (grant Pin Messages/Manage Messages): ${error?.message || error}`);
+          }
+        });
+      }
       return message;
     };
 
@@ -139,5 +147,5 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     return state.panelEditPromise;
   };
 
-  console.log("🎨 DEATH live panel loaded: one sticky message + serialized sync + 7 focused controls.");
+  console.log("🎨 DEATH rich sticky panel loaded: one pinned message + live track artwork + 7 focused controls.");
 }
