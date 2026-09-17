@@ -194,21 +194,23 @@ function install(Manager) {
     const token = Number(state.playbackToken || 0) + 1;
     state.playbackToken = token; state.current = track; state.transitioning = true;
     const failures = [];
-    const jobs = [
-      startInvidious(this, guildId, track, startMs, token).catch(e => { failures.push(`Invidious: ${errText(e?.message || e, 500)}`); return false; }),
-      startYouTube(this, guildId, track, startMs, token).catch(e => { failures.push(`YouTube: ${errText(e?.message || e, 900)}`); return false; })
-    ];
-    const result = await Promise.any(jobs.map(p => p.then(ok => { if (!ok) throw new Error("source failed"); return ok; }))).catch(() => false);
-    if (result) return true;
+
+    // Try the fastest proxy layer first, then direct YouTube, then SoundCloud.
+    // Only one source can own the Discord player at a time.
+    try { await startInvidious(this, guildId, track, startMs, token); return true; }
+    catch (e) { failures.push(`Invidious: ${errText(e?.message || e, 500)}`); }
+    try { await startYouTube(this, guildId, track, startMs, token); return true; }
+    catch (e) { failures.push(`YouTube: ${errText(e?.message || e, 900)}`); }
     try { await startSoundCloud(this, guildId, track, startMs, token); return true; }
     catch (e) { failures.push(`SoundCloud: ${errText(e?.message || e, 600)}`); }
+
     if (state.playbackToken === token) {
       state.current = previous || null; state.transitioning = false; state.audioResource = null;
       Promise.resolve(this.refreshPanel?.(guildId)).catch(() => {});
     }
     throw new Error(`No playable music source was available. ${failures.join(" | ")}`);
   };
-  console.log("🎵 DEATH stable playback v6 loaded: parallel proxy/direct sources + real-PCM handoff + fast recovery.");
+  console.log("🎵 DEATH stable playback v6 loaded: proxy-first source handoff + real-PCM validation + fast recovery.");
 }
 try { install(require("./DirectMusicManager")); } catch (e) { console.error("❌ Stable playback patch failed to load:", e?.message || e); }
 module.exports = { install };
