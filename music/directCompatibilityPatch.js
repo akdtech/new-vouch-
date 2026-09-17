@@ -7,6 +7,23 @@ const STARTUP_GRACE_MS = 30000;
 // index-direct.js owns the single ClientReady -> ensure247 startup path.
 MusicManager.prototype.setupPlayerEvents = function setupPlayerEvents() {};
 
+// Discord voice can take several seconds to finish its gateway/UDP handshake.
+// Do not let an entersState timeout abort the entire music startup. The
+// VoiceConnection remains registered and will transition to Ready asynchronously.
+const originalEnsureConnection = MusicManager.prototype.ensureConnection;
+MusicManager.prototype.ensureConnection = async function ensureConnection(guildId, voiceId) {
+  try {
+    return await originalEnsureConnection.call(this, guildId, voiceId);
+  } catch (error) {
+    const connection = this.connections.get(guildId);
+    if (connection && connection.state.status !== "destroyed") {
+      console.warn(`⚠️ Voice handshake still in progress [${guildId}]: ${error?.message || error}`);
+      return connection;
+    }
+    throw error;
+  }
+};
+
 MusicManager.prototype.skip = async function skip(guildId) {
   const state = this.getState(guildId);
   const player = this.players.get(guildId);
@@ -38,9 +55,8 @@ MusicManager.prototype.reconnect = async function reconnect(guildId, voiceId) {
   }
 };
 
-// Railway restarts can emit a stale VoiceStateUpdate from the previous
-// container. Ignore voice-state recovery during the first 30 seconds so it
-// cannot abort the fresh 24/7 connection before startup music begins.
+// Ignore stale READY/VOICE_STATE events from the previous container during a
+// Railway restart. A real move/disconnect is only actionable after startup.
 MusicManager.prototype.handleVoiceStateUpdate = async function handleVoiceStateUpdate(oldState, newState) {
   if (newState.guild?.id !== this.musicGuildId) return;
   if (newState.id !== this.client.user?.id) return;
