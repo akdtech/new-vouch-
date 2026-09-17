@@ -16,6 +16,11 @@ lavalink:
       http: true
       local: false
 
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    trackStuckThresholdMs: 10000
+    playerUpdateInterval: 5
+
   plugins:
     - dependency: "dev.lavalink.youtube:youtube-plugin:f45bbb7aebfcbc1c553769e04af6cd43afa8b7c3"
       snapshot: true
@@ -26,45 +31,68 @@ lavalink:
 plugins:
   youtube:
     enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
 
     remoteCipher:
       url: "http://yt-cipher.railway.internal:8001"
       password: "GMAO-CIPHER-2026-SECRET"
       userAgent: "DEATH-Music-24-7"
 
-    oauth:
-      enabled: true
-      refreshToken: "1//06NukMJD7O7T5CgYIARAAGAYSNwF-L9IryGUYE3OcOg65jvU1PDeQmBllgXdUUlJXXdBO3IFokIwRuZy5h-hEniOw0Y-an_mHYIg"
-
-    allowSearch: true
-    allowDirectVideoIds: true
-    allowDirectPlaylistIds: true
-
-    # IMPORTANT:
-    # Playback-capable clients first.
+    # Use playback-capable clients only. MUSIC is search-only and TV
+    # requires OAuth for playback, so neither should be relied on for audio.
     clients:
+      - ANDROID_VR
+      - ANDROID_MUSIC
+      - MWEB
       - WEB
-      - TV
+      - WEBEMBEDDED
+      - IOS
       - MUSIC
 
     clientOptions:
+      ANDROID_VR:
+        searching: true
+        playback: true
+        playlistLoading: true
+        videoLoading: true
+
+      ANDROID_MUSIC:
+        searching: true
+        playback: true
+        playlistLoading: false
+        videoLoading: true
+
+      MWEB:
+        searching: true
+        playback: true
+        playlistLoading: true
+        videoLoading: true
+
       WEB:
         searching: true
         playback: true
         playlistLoading: true
         videoLoading: true
 
-      TV:
+      WEBEMBEDDED:
         searching: false
         playback: true
         playlistLoading: false
+        videoLoading: true
+
+      IOS:
+        searching: true
+        playback: true
+        playlistLoading: true
         videoLoading: true
 
       MUSIC:
         searching: true
         playback: false
         playlistLoading: false
-        videoLoading: true
+        videoLoading: false
 
   lavasrc:
     providers:
