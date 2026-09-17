@@ -23,8 +23,8 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     const filled = Math.min(slots - 1, Math.floor(ratio * slots));
     return `${"━".repeat(filled)}●${"━".repeat(Math.max(0, slots - filled - 1))}`;
   };
-  const button = (id, label, emoji, style = ButtonStyle.Secondary, disabled = false) =>
-    new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(disabled);
+  const button = (id, label, emoji, style = ButtonStyle.Secondary) =>
+    new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(false);
 
   MusicManager.prototype.ensurePanel = async function stickyEnsurePanel(guildId) {
     const state = this.getState(guildId);
@@ -74,10 +74,14 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
         try { embed.setImage(current.thumbnail); } catch {}
       }
 
+      // Never disable the controls. A persistent music panel should remain
+      // clickable even for a few seconds while the next source is loading.
+      // The handlers below safely turn a click into the appropriate recovery
+      // action instead of leaving users with dead-looking buttons.
       const row1 = new ActionRowBuilder().addComponents(
-        button("death_music_pause", "Pause", "⏸️", ButtonStyle.Secondary, !current || paused || state.transitioning),
-        button("death_music_resume", "Play", "▶️", ButtonStyle.Success, !current || !paused || state.transitioning),
-        button("death_music_skip", "Skip", "⏭️", ButtonStyle.Primary, !current || state.transitioning),
+        button("death_music_pause", "Pause", "⏸️", ButtonStyle.Secondary),
+        button("death_music_resume", "Play", "▶️", ButtonStyle.Success),
+        button("death_music_skip", "Skip", "⏭️", ButtonStyle.Primary),
         button("death_music_queue", "Queue", "📜")
       );
       const row2 = new ActionRowBuilder().addComponents(
@@ -117,16 +121,13 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
         }
       }
 
-      if (message) {
-        await message.edit(payload);
-      } else {
+      if (message) await message.edit(payload);
+      else {
         message = await channel.send(payload);
         state.panelMessageId = message.id;
         state.panelChannelId = channel.id;
       }
 
-      // Pin when Discord permits it. Some channel types cannot be pinned;
-      // the one-message system below remains persistent even in those channels.
       if (message && !message.pinned) {
         await message.pin("DEATH Music 24/7 persistent control panel").catch(() => {});
       }
@@ -141,9 +142,6 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     return state.panelEditPromise;
   };
 
-  // IMPORTANT: DirectMusicManager.refreshPanel used to rebuild the old 11-button
-  // panel through buildPanelPayload(). Route every refresh through this single
-  // rich-panel renderer so the old panel can never come back.
   MusicManager.prototype.refreshPanel = async function deathRichRefreshPanel(guildId) {
     try {
       await this.ensurePanel(guildId);
@@ -154,5 +152,5 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     }
   };
 
-  console.log("🎨 DEATH rich sticky panel loaded: ONE live message + artwork + 7 focused controls.");
+  console.log("🎨 DEATH rich sticky panel loaded: ONE live message + artwork + 7 focused controls; buttons always interactive.");
 }
