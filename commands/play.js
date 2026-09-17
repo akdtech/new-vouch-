@@ -3,43 +3,33 @@ const { SlashCommandBuilder } = require("discord.js");
 function userSafeMusicError(error) {
   const raw = String(error?.message || "Music error.");
   const lower = raw.toLowerCase();
-
   if (lower.includes("sign in to confirm") || lower.includes("not a bot")) {
-    return "❌ YouTube is currently blocking playback from the Railway server IP. The music engine will retry later automatically.";
+    return "❌ YouTube is blocking this Railway source right now. DEATH Music is automatically switching to another playback source.";
   }
-
-  if (lower.includes("no playable youtube stream")) {
-    return "❌ I couldn't get an audio stream from YouTube right now. Please try again in a moment.";
+  if (lower.includes("no playable music source")) {
+    return "❌ I couldn't get a playable audio source for that song right now. Autoplay recovery is still active.";
   }
-
   const compact = raw.replace(/\s+/g, " ").trim();
   return `❌ ${compact.slice(0, 1800)}${compact.length > 1800 ? "…" : ""}`;
 }
 
-function isTransientPlaybackFailure(error) {
-  const text = String(error?.message || "").toLowerCase();
-  return [
-    "no pcm",
-    "ffmpeg",
-    "yt-dlp",
-    "soundcloud",
-    "youtube playback failed",
-    "no audio bytes",
-    "timed out",
-    "exited null"
-  ].some(marker => text.includes(marker));
+function resultText(result, music) {
+  const track = result?.track || result?.tracks?.[0];
+  const title = music.getTrackTitle(track);
+  if (result?.type === "playlist") {
+    return result.startedNow
+      ? `▶️ **Starting playlist:** ${result.tracks.length} tracks`
+      : `🎵 **Added playlist to queue:** ${result.tracks.length} tracks`;
+  }
+  return result?.startedNow
+    ? `▶️ **Now playing:** ${title}`
+    : `🎵 **Added to queue:** ${title}`;
 }
 
-async function replyAfterFailure(interaction, content) {
-  try {
-    if (interaction.replied || interaction.deferred) {
-      return await interaction.editReply(content);
-    }
-    return await interaction.reply(content);
-  } catch (error) {
-    if (error?.code === 10008) {
-      try { return await interaction.followUp(content); } catch {}
-    }
+async function safeEdit(interaction, content) {
+  try { return await interaction.editReply(content); }
+  catch (error) {
+    if (error?.code === 10008) { try { return await interaction.followUp(content); } catch {} }
     throw error;
   }
 }
@@ -48,64 +38,54 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("play")
     .setDescription("Add a song or playlist to DEATH Music 24/7.")
-    .addStringOption(option =>
-      option
-        .setName("query")
-        .setDescription("Song name, artist, YouTube URL or playlist")
-        .setRequired(true)
-    ),
+    .addStringOption(option => option
+      .setName("query")
+      .setDescription("Song name, artist, YouTube URL or playlist")
+      .setRequired(true)),
 
   async execute(interaction, { music }) {
-    if (!interaction.guildId) {
-      return interaction.reply({ content: "❌ Server only.", ephemeral: true });
-    }
+    if (!interaction.guildId) return interaction.reply({ content: "❌ Server only.", ephemeral: true });
 
     const query = interaction.options.getString("query", true).trim();
     await interaction.deferReply();
 
-    let lastError = null;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const result = await music.play({
-          guildId: interaction.guildId,
-          voiceId: interaction.member?.voice?.channelId || music.getPermanentVoiceChannelId(),
-          textId: interaction.channelId,
-          query,
-          requester: interaction.user
-        });
+    // Never leave Discord showing the command as "thinking" while a source
+    // provider is recovering. The actual playback promise keeps running.
+    const playback = music.play({
+      guildId: interaction.guildId,
+      voiceId: interaction.member?.voice?.channelId || music.getPermanentVoiceChannelId(),
+      textId: interaction.channelId,
+      query,
+      requester: interaction.user
+    });
 
-        const track = result.track || result.tracks?.[0];
-        const title = music.getTrackTitle(track);
+    let timedOut = false;
+    const early = await Promise.race([
+      playback.then(result => ({ result })).catch(error => ({ error })),
+      new Promise(resolve => setTimeout(() => resolve({ loading: true }), 1200))
+    ]);
 
-        if (result.type === "playlist") {
-          return interaction.editReply(
-            result.startedNow
-              ? `▶️ **Starting playlist:** ${result.tracks.length} tracks`
-              : `🎵 **Added playlist to queue:** ${result.tracks.length} tracks`
-          );
-        }
-
-        return interaction.editReply(
-          result.startedNow
-            ? `▶️ **Now playing:** ${title}`
-            : `🎵 **Added to queue:** ${title}`
-        );
-      } catch (error) {
-        lastError = error;
-        console.error(`❌ /play attempt ${attempt}:`, error);
-        if (attempt < 2 && isTransientPlaybackFailure(error)) {
-          await new Promise(resolve => setTimeout(resolve, 1200));
-          continue;
-        }
-        break;
-      }
+    if (early.loading) {
+      await safeEdit(interaction, `⏳ **Loading:** ${query}\n🎵 DEATH Music is finding the fastest available audio source…`);
+      playback.then(async result => {
+        try { await safeEdit(interaction, resultText(result, music)); }
+        catch (error) { if (error?.code !== 10008) console.error("❌ /play late response:", error); }
+      }).catch(async error => {
+        console.error("❌ /play:", error);
+        try { await safeEdit(interaction, userSafeMusicError(error)); } catch {}
+        try {
+          const state = music.getState(interaction.guildId);
+          if (!state.current && state.autoplay && !state.intentionalLeave) music.autoplayNext(interaction.guildId).catch(() => {});
+        } catch {}
+      });
+      return;
     }
 
-    try {
-      return await replyAfterFailure(interaction, userSafeMusicError(lastError));
-    } catch (error) {
-      if (error?.code !== 10008) console.error("❌ /play response error:", error);
-      return null;
+    if (early.error) {
+      console.error("❌ /play:", early.error);
+      return safeEdit(interaction, userSafeMusicError(early.error));
     }
+
+    return safeEdit(interaction, resultText(early.result, music));
   }
 };
