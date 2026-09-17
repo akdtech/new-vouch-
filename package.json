@@ -1,6 +1,6 @@
 {
   "name": "gmao-death-discord-bot",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "DEATH × GMAO all-in-one Discord community bot with direct 24/7 music playback.",
   "main": "index-direct.js",
   "scripts": {
@@ -11,10 +11,10 @@
     "node": ">=24.17.0"
   },
   "dependencies": {
-    "@discordjs/opus": "0.10.0",
     "@discordjs/voice": "0.19.2",
     "discord.js": "14.27.0",
     "dotenv": "17.2.2",
+    "opusscript": "0.1.1",
     "pg": "8.16.3"
   }
 }
