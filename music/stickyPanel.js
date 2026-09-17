@@ -24,9 +24,7 @@ function buildPanel() {
   for (let i = 0; i < BUTTONS.length; i += 5) {
     const row = new ActionRowBuilder();
     for (const [id, label, emoji, style] of BUTTONS.slice(i, i + 5)) {
-      row.addComponents(
-        new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style)
-      );
+      row.addComponents(new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style));
     }
     rows.push(row);
   }
@@ -50,10 +48,7 @@ function buildPanel() {
 }
 
 function isPanel(message) {
-  return Boolean(
-    message?.author?.bot &&
-    message.embeds?.some(e => e.title === PANEL_TITLE || e.footer?.text === PANEL_MARKER)
-  );
+  return Boolean(message?.author?.bot && message.embeds?.some(e => e.title === PANEL_TITLE || e.footer?.text === PANEL_MARKER));
 }
 
 function getConfiguredChannelId() {
@@ -68,17 +63,26 @@ function canSend(channel, member) {
 
 async function chooseChannel(guild) {
   const configured = getConfiguredChannelId();
+  const me = guild.members.me;
+
   if (configured) {
     const channel = guild.channels.cache.get(configured);
-    if (channel?.isTextBased()) return channel;
+    if (channel?.isTextBased() && canSend(channel, me)) return channel;
   }
 
-  if (guild.systemChannel?.isTextBased()) {
-    const me = guild.members.me;
-    if (canSend(guild.systemChannel, me)) return guild.systemChannel;
-  }
+  /* Prefer the server's actual music text channel automatically. */
+  const musicChannel = guild.channels.cache
+    .filter(c => c.isTextBased() && !c.isThread())
+    .sort((a, b) => a.position - b.position)
+    .find(c => {
+      const name = String(c.name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return (name === "music" || name === "music247" || name === "deathmusic" || name.includes("music")) && canSend(c, me);
+    });
 
-  const me = guild.members.me;
+  if (musicChannel) return musicChannel;
+
+  if (guild.systemChannel?.isTextBased() && canSend(guild.systemChannel, me)) return guild.systemChannel;
+
   return guild.channels.cache
     .filter(c => c.isTextBased() && !c.isThread())
     .sort((a, b) => a.position - b.position)
@@ -97,7 +101,7 @@ async function createPanel(channel) {
 async function ensurePanel(guild) {
   const channel = await chooseChannel(guild);
   if (!channel) {
-    console.error(`❌ No writable text channel found for the DEATH music panel in ${guild.name}.`);
+    console.error(`❌ No writable music text channel found for the DEATH music panel in ${guild.name}.`);
     return null;
   }
 
@@ -151,9 +155,7 @@ function setupStickyMusicPanel(client, music) {
       timers.delete(message.channelId);
       try {
         const messages = await message.channel.messages.fetch({ limit: 100 });
-        for (const panel of messages.filter(isPanel).values()) {
-          await panel.delete().catch(() => {});
-        }
+        for (const panel of messages.filter(isPanel).values()) await panel.delete().catch(() => {});
         await createPanel(message.channel);
       } catch (error) {
         console.warn("⚠️ Sticky panel refresh failed:", error?.message || error);
