@@ -5,7 +5,8 @@ const MusicManager = require("./DirectMusicManager");
 const MAX_AUTOPLAY_MS = 8 * 60 * 1000;
 const IDEAL_MIN_MS = 90 * 1000;
 const IDEAL_MAX_MS = 6 * 60 * 1000;
-const AUTOPLAY_BLOCK_MS = 15 * 60 * 1000;
+const AUTOPLAY_BLOCK_MS = 20 * 1000;
+const MAX_SOURCE_ATTEMPTS = 3;
 const PIPED_SEARCH_TIMEOUT_MS = 3500;
 const PIPED_SEARCH_INSTANCES = String(process.env.PIPED_API_URLS || [
   "https://pipedapi.ducks.party",
@@ -15,12 +16,6 @@ const PIPED_SEARCH_INSTANCES = String(process.env.PIPED_API_URLS || [
   "https://pipedapi.darkness.services",
   "https://pipedapi.owo.si"
 ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
-const SAFE_AUTOPLAY_SEEDS = [
-  "Alan Walker Faded official audio",
-  "The Weeknd Blinding Lights official audio",
-  "Ed Sheeran Shape of You official audio",
-  "Arijit Singh Kesariya official audio"
-];
 
 const BAD_TITLE = /\b(\d+\s*(?:hour|hr)s?|hour\s*mix|\bmix\b|playlist|compilation|continuous|nonstop|radio|medley|full\s*album|album|collection|lofi\s*mix|sleep\s*music|long\s*version)\b/i;
 const STOP_WORDS = new Set(["the","a","an","and","or","of","to","for","in","on","at","with","from","is","it","my","your","me","you","official","video","audio","music","song","songs","lyrics","lyric","remix","edit","version","full","hd","4k","feat","ft"]);
@@ -32,7 +27,7 @@ function artistMatches(a,b){const l=clean(a).toLowerCase(),r=clean(b).toLowerCas
 function trackId(track){return track?.identifier||track?.id||track?.url;}
 function isAutoplayCandidate(track){const title=clean(track?.title),length=Number(track?.length||0);return Number.isFinite(length)&&length>0&&length<=MAX_AUTOPLAY_MS&&!BAD_TITLE.test(title);}
 function candidateScore(track,context,recent){const title=clean(track?.title),artist=clean(track?.author||track?.uploader),length=Number(track?.length||0),haystack=`${title} ${artist}`.toLowerCase();let score=0;if(artistMatches(artist,context.artist))score+=150;for(const word of context.words||[])if(haystack.includes(word))score+=20;if(length>=IDEAL_MIN_MS&&length<=IDEAL_MAX_MS)score+=25;else if(length>IDEAL_MAX_MS)score-=5;else score-=5;const id=trackId(track);if(id&&recent.includes(id))score-=1000;return score;}
-function isYoutubeBotBlock(error){const text=String(error?.message||error||"").toLowerCase();return text.includes("sign in to confirm")||text.includes("not a bot")||text.includes("login_required");}
+function isYoutubeBotBlock(error){const text=String(error?.message||error||"").toLowerCase();return text.includes("sign in to confirm")||text.includes("not a bot")||text.includes("login_required")||text.includes("bot-check");}
 
 async function pipedSearch(query, requester){
   const q=clean(query);
@@ -107,7 +102,7 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
       queries.push("trending songs 2026 individual songs");
     }
 
-    let chosen=null,chosenScore=-Infinity;
+    const ranked = new Map();
     for(const query of [...new Set(queries)]){
       if(/\bundefined\b|\bnull\b/i.test(query))continue;
       let tracks=[];
@@ -119,62 +114,70 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
         else console.warn(`⚠️ Context autoplay search failed: ${query} — ${error?.message||error}`);
       }
 
-      let candidates=tracks.filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track))).map(track=>({track,score:candidateScore(track,{artist,words:contextWords},recent)})).sort((a,b)=>b.score-a.score);
-
-      if(!candidates.length){
-        const pipedTracks=await pipedSearch(query,this.client.user);
-        candidates=pipedTracks.filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track))).map(track=>({track,score:candidateScore(track,{artist,words:contextWords},recent)})).sort((a,b)=>b.score-a.score);
+      let candidates=tracks.filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track)));
+      if(!candidates.length) candidates=await pipedSearch(query,this.client.user);
+      for(const track of candidates.filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track)))){
+        const id=trackId(track);if(!id)continue;
+        const score=candidateScore(track,{artist,words:contextWords},recent);
+        const old=ranked.get(id);
+        if(!old||score>old.score)ranked.set(id,{track,score});
       }
-
-      if(!candidates.length)continue;
-      const topScore=candidates[0].score,top=candidates.filter(item=>item.score>=topScore-15).slice(0,5),picked=top[Math.floor(Math.random()*top.length)];
-      if(picked&&picked.score>chosenScore){chosen=picked.track;chosenScore=picked.score;}
-      if(chosen&&chosenScore>=150)break;
     }
 
-    if(!chosen){
+    const candidates=[...ranked.values()].sort((a,b)=>b.score-a.score).slice(0,12);
+    if(!candidates.length){
       const pipedFallback=await pipedSearch("popular songs 2026 official audio",this.client.user);
-      chosen=pipedFallback.filter(isAutoplayCandidate).find(track=>!recent.includes(trackId(track)))||null;
-    }
-
-    // Final startup/recovery safety net: use known individual-song queries,
-    // never a mix/album/playlist, so autoplay can actually start after a
-    // clean Railway restart even when public search engines return junk.
-    if(!chosen){
-      for(const seed of SAFE_AUTOPLAY_SEEDS){
-        const seedTracks=await pipedSearch(seed,this.client.user);
-        const candidate=seedTracks.filter(isAutoplayCandidate).find(track=>!recent.includes(trackId(track)));
-        if(candidate){chosen=candidate;break;}
+      for(const track of pipedFallback.filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track)))){
+        const id=trackId(track);if(id)ranked.set(id,{track,score:candidateScore(track,{artist,words:contextWords},recent)});
       }
     }
 
-    if(!chosen||!isAutoplayCandidate(chosen)){console.warn("⚠️ No short individual autoplay track found; keeping autoplay armed for the next recovery cycle.");return false;}
+    const attempts=[...ranked.values()].sort((a,b)=>b.score-a.score).slice(0,MAX_SOURCE_ATTEMPTS);
+    let lastError=null;
+    for(const candidate of attempts){
+      const chosen=candidate.track;
+      const id=trackId(chosen);
+      try{
+        if(id)state.recent=[...recent,id].slice(-20);
+        chosen.isAutoplay=true;
+        chosen.autoplayGroup=artist?`Same artist / related: ${artist}`:"Related search / genre";
+        const chosenArtist=clean(chosen.author||chosen.uploader);
+        state.autoplayContext={
+          artist:artistIsUseful(chosenArtist)?chosenArtist:artist,
+          title:clean(chosen.title),
+          query:contextQuery||clean(chosen.title),
+          words:[...new Set([...(contextWords||[]),...words(chosen.title)])].slice(0,10)
+        };
 
-    const id=trackId(chosen);if(id)state.recent=[...recent,id].slice(-20);
-    chosen.isAutoplay=true;chosen.autoplayGroup=artist?`Same artist / related: ${artist}`:"Related search / genre";
-    const chosenArtist=clean(chosen.author||chosen.uploader);
-    state.autoplayContext={
-      artist:artistIsUseful(chosenArtist)?chosenArtist:artist,
-      title:clean(chosen.title),
-      query:contextQuery||clean(chosen.title),
-      words:[...new Set([...(contextWords||[]),...words(chosen.title)])].slice(0,10)
-    };
-
-    await this.startTrack(guildId,chosen);
-    console.log(`🎯 Short-track autoplay started: ${this.getTrackTitle(chosen)} — ${this.getTrackAuthor(chosen)} | ${chosen.autoplayGroup} | max=8m`);
-    return true;
-  }catch(error){
-    if(isYoutubeBotBlock(error)){
-      state.autoplayBlockedUntil=Date.now()+AUTOPLAY_BLOCK_MS;
-      if(Number(state.autoplayBlockNoticeUntil||0)<=Date.now()){
-        state.autoplayBlockNoticeUntil=Date.now()+AUTOPLAY_BLOCK_MS;
-        console.warn("⏸️ Autoplay paused temporarily because YouTube is returning bot-check responses. Retry window=15m.");
+        await this.startTrack(guildId,chosen);
+        state.autoplayBlockedUntil=0;
+        console.log(`🎯 Short-track autoplay started: ${this.getTrackTitle(chosen)} — ${this.getTrackAuthor(chosen)} | ${chosen.autoplayGroup} | max=8m`);
+        return true;
+      }catch(error){
+        lastError=error;
+        console.warn(`⚠️ Autoplay source failed; trying another track: ${this.getTrackTitle(chosen)} — ${error?.message||error}`);
       }
     }
-    console.error("❌ Context autoplay error:",error?.message||error);
+
     state.current=null;
+    state.transitioning=false;
+    if(isYoutubeBotBlock(lastError)){
+      state.autoplayBlockedUntil=Date.now()+AUTOPLAY_BLOCK_MS;
+      console.warn(`⏸️ Autoplay source recovery cooling down briefly (${AUTOPLAY_BLOCK_MS/1000}s); it will retry automatically.`);
+    }else{
+      state.autoplayBlockedUntil=Date.now()+5000;
+      console.warn("⏸️ Autoplay source recovery cooling down briefly (5s); it will retry automatically.");
+    }
+    Promise.resolve(this.refreshPanel?.(guildId)).catch(()=>{});
+    return false;
+  }catch(error){
+    state.transitioning=false;
+    state.current=null;
+    state.autoplayBlockedUntil=Date.now()+5000;
+    console.error("❌ Context autoplay error:",error?.message||error);
+    Promise.resolve(this.refreshPanel?.(guildId)).catch(()=>{});
     return false;
   }finally{state.autoplayBusy=false;}
 };
 
-console.log("🎯 DEATH smart autoplay loaded: related songs + hard 8-minute maximum + artist/genre chaining + Piped individual-track fallback + safe startup seeds.");
+console.log("🎯 DEATH smart autoplay loaded: related songs + hard 8-minute maximum + artist/genre chaining + multi-track source recovery.");
