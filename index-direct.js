@@ -66,7 +66,7 @@ function resolveMusicPanelChannel(guildId, preferredChannelId = null) {
 
   for (const channel of guild.channels.cache.values()) {
     if (!channel?.isTextBased?.()) continue;
-    if (/^(music|music-247|death-music|death-music-247)$/i.test(String(channel.name || ""))) {
+    if (/(^|[-_\s])(music|music-247|death-music|death-music-247|247)([-_\s]|$)/i.test(String(channel.name || "")) || /music|24\/7|247/i.test(String(channel.name || ""))) {
       candidates.push(channel);
     }
   }
@@ -137,8 +137,6 @@ client.on(Events.InteractionCreate, async interaction => {
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
 
-    // If the bot has no configured panel channel, let a command used in the
-    // server's music channel establish the persistent panel location.
     if (interaction.guildId === config.guildId) {
       resolveMusicPanelChannel(interaction.guildId, interaction.channelId);
     }
