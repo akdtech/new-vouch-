@@ -7,6 +7,21 @@ const STARTUP_GRACE_MS = 30000;
 // index-direct.js owns the single ClientReady -> ensure247 startup path.
 MusicManager.prototype.setupPlayerEvents = function setupPlayerEvents() {};
 
+// Make the permanent GMAO music service start autoplay on the first boot even
+// if AUTOPLAY_DEFAULT was left disabled in an older Railway environment.
+// After first boot, the normal Autoplay button/setting controls the state.
+const originalEnsure247 = MusicManager.prototype.ensure247;
+MusicManager.prototype.ensure247 = async function ensure247(guildId) {
+  const state = this.getState(guildId);
+  if (guildId === this.musicGuildId && !this.__deathPermanentStartupInitialized) {
+    this.__deathPermanentStartupInitialized = true;
+    state.autoplay = true;
+    state.permanent = true;
+    state.intentionalLeave = false;
+  }
+  return originalEnsure247.call(this, guildId);
+};
+
 // Discord voice can take several seconds to finish its gateway/UDP handshake.
 // Do not let an entersState timeout abort the entire music startup. The
 // VoiceConnection remains registered and will transition to Ready asynchronously.
