@@ -30,6 +30,7 @@ require("./music/directPanelPatch.js");
 require("./music/directSyncPatch.js");
 require("./music/directLiveStatePatch.js");
 require("./music/directPlaylistPatch.js");
+require("./music/directFinalFixPatch.js");
 
 if (!config.token || !config.clientId) {
   console.error("❌ Missing DISCORD_TOKEN or CLIENT_ID.");
