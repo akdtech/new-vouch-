@@ -191,13 +191,10 @@ async function getInvidiousStream(id) {
 
 async function resolveYouTubeUrl(track) {
   const profiles = [
+    "mweb",
     "web_safari",
-    "tv_simply",
-    "tv",
-    "android_vr",
     "web_embedded",
-    "default,web_embedded",
-    "mweb"
+    "android_vr"
   ];
   let lastError = null;
 
@@ -331,12 +328,69 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
 
 async function searchYt(manager, query, requester) {
   const q = manager.cleanQuery(query);
+  const piped = String(process.env.PIPED_API_URLS || [
+    "https://pipedapi.ducks.party",
+    "https://api.piped.private.coffee",
+    "https://pipedapi.leptons.xyz",
+    "https://pipedapi.adminforge.de",
+    "https://pipedapi.darkness.services"
+  ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
+  const invidious = INVIDIOUS.slice(0, 5);
+
+  const makeTrack = x => {
+    const id = x?.videoId || x?.id || String(x?.url || "").match(/[?&]v=([A-Za-z0-9_-]{11})/)?.[1];
+    if (!id || !x?.title) return null;
+    return normalize({
+      id,
+      title: x.title,
+      uploader: x.author || x.uploaderName || x.uploader || "Unknown artist",
+      duration: x.lengthSeconds || x.duration || 0,
+      thumbnail: x.thumbnail || x.thumbnailUrl || null
+    }, requester, `https://www.youtube.com/watch?v=${id}`);
+  };
+
+  const httpSearch = async (base, kind) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    try {
+      const url = kind === "piped"
+        ? `${base}/search?q=${encodeURIComponent(q)}&filter=music_songs`
+        : `${base}/api/v1/search?q=${encodeURIComponent(q)}&type=video&sort=relevance`;
+      const r = await fetch(url, {
+        headers: { accept: "application/json", "user-agent": "DEATH-Music-24-7/5.0" },
+        signal: controller.signal,
+        redirect: "follow"
+      });
+      if (!r.ok) throw new Error(`${kind} HTTP ${r.status}`);
+      const data = await r.json();
+      const items = kind === "piped"
+        ? (Array.isArray(data?.items) ? data.items : []).filter(x => x?.type === "stream")
+        : (Array.isArray(data) ? data : []).filter(x => x?.type === "video");
+      const tracks = items.map(makeTrack).filter(Boolean).slice(0, 8);
+      if (!tracks.length) throw new Error(`no ${kind} results`);
+      return tracks;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  try {
+    const result = await Promise.any([
+      ...piped.map(base => httpSearch(base, "piped")),
+      ...invidious.map(base => httpSearch(base, "invidious"))
+    ]);
+    console.log(`🔎 Fast search success: ${result[0]?.title || q}`);
+    return { type: "track", tracks: result };
+  } catch (proxyError) {
+    console.warn(`⚠️ Fast proxy search unavailable; trying yt-dlp briefly: ${clean(proxyError?.message || proxyError).slice(-500)}`);
+  }
+
   const result = await runYtDlp([
     "--dump-single-json",
     "--flat-playlist",
     "--playlist-end", "5",
-    `ytsearch5:${q}`
-  ], SEARCH_TIMEOUT);
+    "ytsearch5:" + q
+  ], 9000, "mweb");
 
   let data;
   try { data = JSON.parse(result.stdout); }
@@ -344,16 +398,12 @@ async function searchYt(manager, query, requester) {
     const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
     data = lines.length ? JSON.parse(lines.at(-1)) : null;
   }
-
   const entries = Array.isArray(data?.entries) ? data.entries : [];
-  const tracks = entries
-    .filter(x => x?.id)
-    .map(x => normalize(x, requester))
-    .filter(x => x.url);
-
+  const tracks = entries.map(x => normalize(x, requester)).filter(x => x.url);
   if (!tracks.length) throw new Error(`Track not found for "${q}".`);
   return { type: "track", tracks };
 }
+
 
 function install() {
   if (MusicManager.prototype.__deathFinalCoreV1) return;
@@ -366,21 +416,15 @@ function install() {
 
     // Keep the existing fast Invidious search if it is healthy.
     if (!this.isYouTubeUrl(q)) {
-      try {
-        const result = await originalSearch.call(this, q, requester);
-        if (result?.tracks?.length) return result;
-      } catch (error) {
-        console.warn(`⚠️ Primary music search failed; using direct YouTube search: ${clean(error?.message || error).slice(-500)}`);
-      }
       return searchYt(this, q, requester);
     }
 
     try {
-      const result = await this.runYtDlp([
+      const result = await runYtDlp([
         "--dump-single-json",
         "--skip-download",
         q
-      ], SEARCH_TIMEOUT);
+      ], SEARCH_TIMEOUT, "mweb");
       return { type: "track", tracks: [normalize(JSON.parse(result.stdout), requester, q)] };
     } catch (error) {
       // URL metadata is not required to start playback; keep the URL playable.
@@ -586,7 +630,7 @@ function install() {
   };
 
   if (!this?.dummy) {}
-  console.log("🧰 DEATH FINAL core loaded: direct media URLs + bgutil PO tokens + atomic playback + self-healing autoplay + live panel/status.");
+  console.log("🧰 DEATH FINAL core v2 loaded: fast proxy search + mweb/bgutil PO playback + atomic handoff + self-healing autoplay + live panel/status.");
 }
 
 install();
