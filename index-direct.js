@@ -148,6 +148,54 @@ client.once(Events.ClientReady, async readyClient => {
   }
 });
 
+// Sticky music panel: whenever a real user posts in the music panel channel,
+// move the single control panel message to the bottom so the controls stay visible.
+let stickyPanelTimer = null;
+let stickyPanelBusy = false;
+
+client.on(Events.MessageCreate, message => {
+  if (!message.guildId || message.author?.bot) return;
+  if (message.guildId !== config.guildId) return;
+  if (!music.musicTextChannelId || message.channelId !== music.musicTextChannelId) return;
+
+  clearTimeout(stickyPanelTimer);
+  stickyPanelTimer = setTimeout(async () => {
+    if (stickyPanelBusy) return;
+    stickyPanelBusy = true;
+    try {
+      const state = music.getState(message.guildId);
+      const panelId = state.panelMessageId;
+      if (!panelId || panelId === message.id) return;
+
+      const channel = message.channel;
+      let panel = null;
+      try { panel = await channel.messages.fetch(panelId); } catch { panel = null; }
+      if (!panel) {
+        await music.ensurePanel(message.guildId).catch(() => {});
+        return;
+      }
+
+      // Editing does not change Discord message order, so recreate the same
+      // panel at the bottom. The state keeps the new message ID for buttons
+      // and future sticky moves. No bot-message loop is possible because the
+      // panel itself is ignored by this listener.
+      const payload = {
+        embeds: panel.embeds.map(embed => embed.toJSON()),
+        components: panel.components.map(row => row.toJSON())
+      };
+      const newPanel = await channel.send(payload);
+      state.panelMessageId = newPanel.id;
+      state.panelChannelId = channel.id;
+      await panel.delete().catch(() => {});
+      if (!newPanel.pinned) await newPanel.pin("DEATH Music 24/7 sticky control panel").catch(() => {});
+    } catch (error) {
+      console.warn("⚠️ Sticky music panel move failed:", error?.message || error);
+    } finally {
+      stickyPanelBusy = false;
+    }
+  }, 350);
+});
+
 client.on(Events.InteractionCreate, async interaction => {
   if (interaction.isChatInputCommand()) {
     const command = client.commands.get(interaction.commandName);
