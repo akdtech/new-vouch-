@@ -136,10 +136,12 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
 
     const previous = state.panelEditPromise || Promise.resolve();
     const next = previous.catch(() => {}).then(run);
-    state.panelEditPromise = next.finally(() => {
-      if (state.panelEditPromise === next) state.panelEditPromise = null;
+    let wrapped;
+    wrapped = next.finally(() => {
+      if (state.panelEditPromise === wrapped) state.panelEditPromise = null;
     });
-    return state.panelEditPromise;
+    state.panelEditPromise = wrapped;
+    return wrapped;
   };
 
   MusicManager.prototype.refreshPanel = async function deathRichRefreshPanel(guildId) {
