@@ -311,6 +311,7 @@ class DirectMusicManager {
         title: t.title || "Unknown track",
         author: t.user?.name || t.user?.handle || "Audius artist",
         length: Number(t.duration || 0) * 1000,
+        playCount: Number(t.playCount || 0),
         genre: t.genre || t.tags?.genre || null,
         requester: requester || this.client.user,
         thumbnail: t.artwork?.["480x480"] || t.artwork?.["150x150"] || null,
@@ -414,16 +415,27 @@ class DirectMusicManager {
         );
       }
 
-      const best = tracks[0];
       const minimum = Math.max(18, Math.min(70, tokens.length * 12));
-      if (best._searchScore < minimum) {
-        throw new Error("No close match found for \"" + clean + "\" on the music catalog.");
+      const exactTitleMatches = tracks.filter(track => normalize(track.title) === queryText);
+      const strongTitleMatches = tracks.filter(track =>
+        tokens.length > 0 && tokens.every(token => normalize(track.title).split(" ").includes(token))
+      );
+      const candidates = (exactTitleMatches.length ? exactTitleMatches : strongTitleMatches.length ? strongTitleMatches : tracks)
+        .slice()
+        .sort((a, b) => {
+          const scoreDiff = Number(b._searchScore || 0) - Number(a._searchScore || 0);
+          if (scoreDiff) return scoreDiff;
+          return Number(b.playCount || 0) - Number(a.playCount || 0);
+        });
+      const best = candidates[0];
+
+      if (!best || best._searchScore < minimum) {
+        throw new Error("No exact/close match found for \"" + clean + "\".");
       }
 
-      return {
-        type: "track",
-        tracks: tracks.map(({ _searchScore, ...track }) => track)
-      };
+      console.log(`🎯 MUSIC SEARCH: "${clean}" -> "${best.title}" by "${best.author}" [score=${best._searchScore}]`);
+      const { _searchScore, ...selectedTrack } = best;
+      return { type: "track", tracks: [selectedTrack] };
     } finally {
       clearTimeout(timer);
     }
