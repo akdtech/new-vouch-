@@ -215,7 +215,7 @@ function install(Manager) {
     catch (e) { failures.push(`SoundCloud: ${errText(e?.message || e, 600)}`); }
 
     if (state.playbackToken === token) {
-      state.current = previous || null; state.transitioning = false;
+      state.current = previous || null; state.pendingTrack = null; state.transitioning = false;
       if (!handoff) state.audioResource = null;
       Promise.resolve(this.refreshPanel?.(guildId)).catch(() => {});
     }
