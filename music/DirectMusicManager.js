@@ -791,21 +791,25 @@ class DirectMusicManager {
     const current = state.current;
     const duration = current?.length || 0;
     const position = this.getPosition(guildId);
+    const fallbackMusicImage = "https://images.unsplash.com/photo-1511379938547-c1f69419868d?auto=format&fit=crop&w=1600&q=85";
     const embed = new EmbedBuilder()
+      .setColor(0x8b5cf6)
+      .setAuthor({ name: "DEATH × GMAO • Music Control" })
       .setTitle("💀 DEATH Music 24/7")
-      .setDescription(current ? `🎵 **${this.getTrackTitle(current)}**\nArtist: **${this.getTrackAuthor(current)}**` : "🎵 **Nothing is playing**\nAutoplay is ready to continue music.")
+      .setDescription(current ? `🎵 **${this.getTrackTitle(current)}**\n👤 **${this.getTrackAuthor(current)}**` : "🎵 **Nothing is playing**\nAutoplay is ready to continue music.")
       .addFields(
-        { name: "Duration", value: this.formatDuration(duration), inline: true },
-        { name: "Position", value: this.formatDuration(position), inline: true },
-        { name: "Volume", value: `${state.volume}%`, inline: true },
-        { name: "Loop", value: state.loop, inline: true },
-        { name: "Autoplay", value: state.autoplay ? "ON" : "OFF", inline: true },
-        { name: "Queue", value: String(state.queue.length), inline: true }
+        { name: "⏱ Duration", value: this.formatDuration(duration), inline: true },
+        { name: "▶ Position", value: this.formatDuration(position), inline: true },
+        { name: "🔊 Volume", value: `${state.volume}%`, inline: true },
+        { name: "🔁 Loop", value: state.loop.toUpperCase(), inline: true },
+        { name: "♾ Autoplay", value: state.autoplay ? "ON" : "OFF", inline: true },
+        { name: "📜 Queue", value: String(state.queue.length), inline: true }
       )
-      .setFooter({ text: "DEATH × GMAO • Direct Voice Music" })
+      .setImage(current?.thumbnail || fallbackMusicImage)
+      .setFooter({ text: "DEATH × GMAO • 24/7 Direct Voice Music" })
       .setTimestamp();
 
-    const row1 = new ActionRowBuilder().addComponents(
+    const row1 = new ActionRowBuilder().addComponents
       new ButtonBuilder().setCustomId("death_music_pause").setLabel("Pause").setEmoji("⏸️").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("death_music_resume").setLabel("Resume").setEmoji("▶️").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("death_music_skip").setLabel("Skip").setEmoji("⏭️").setStyle(ButtonStyle.Primary),
@@ -847,6 +851,26 @@ class DirectMusicManager {
     state.panelMessageId = message.id;
     state.panelChannelId = channel.id;
     return message;
+  }
+
+  async movePanelToBottom(guildId) {
+    const state = this.getState(guildId);
+    const channel = await this.findPanelChannel(guildId);
+    const oldId = state.panelMessageId;
+    let oldPanel = null;
+
+    if (oldId && state.panelChannelId === channel.id) {
+      try { oldPanel = await channel.messages.fetch(oldId); } catch {}
+    }
+
+    const newPanel = await channel.send(this.buildPanelPayload(guildId));
+    state.panelMessageId = newPanel.id;
+    state.panelChannelId = channel.id;
+
+    if (oldPanel && oldPanel.id !== newPanel.id) {
+      await oldPanel.delete().catch(() => {});
+    }
+    return newPanel;
   }
 
   async refreshPanel(guildId) {
