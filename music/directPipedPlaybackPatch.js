@@ -49,10 +49,11 @@ async function getPipedStream(id) {
     const audio = (Array.isArray(data?.audioStreams) ? data.audioStreams : [])
       .filter(x => x?.url)
       .sort((a, b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))[0];
-    if (!audio?.url) throw new Error("no audio stream");
+    const streamUrl = audio?.url || data?.hls;
+    if (!streamUrl) throw new Error("no audio/HLS stream");
     return {
       base,
-      url: audio.url,
+      url: streamUrl,
       title: clean(data?.title),
       author: clean(data?.uploader) || clean(data?.uploaderName),
       length: Number(data?.duration || 0) * 1000,
