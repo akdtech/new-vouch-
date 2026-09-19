@@ -625,13 +625,19 @@ class DirectMusicManager {
   async skip(guildId) {
     const state = this.getState(guildId);
     if (!state.current) throw new Error("Nothing is playing.");
+
+    // Keep the current track in state until handleTrackEnd() processes it.
+    // The old code cleared state.current first, so handleTrackEnd() had
+    // nothing left to advance to the queue/autoplay track.
     const player = this.players.get(guildId);
-    this.destroyStream(guildId);
-    state.current = null;
-    state.startedAt = 0;
-    state.positionOffset = 0;
-    try { player?.stop(true); } catch {}
-    await this.handleTrackEnd(guildId).catch(() => {});
+    state.transitioning = true;
+    try {
+      this.destroyStream(guildId);
+      try { player?.stop(true); } catch {}
+      await this.handleTrackEnd(guildId);
+    } finally {
+      state.transitioning = false;
+    }
   }
 
   async stop(guildId) {
