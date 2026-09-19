@@ -35,23 +35,23 @@ const clean = v => String(v || "").replace(/\s+/g, " ").trim();
 const idOf = t => t?.identifier || t?.id || t?.url || null;
 const kill = p => { try { p?.kill("SIGKILL"); } catch {} };
 
-function youtubeArgs() {
+function youtubeArgs(profile = "default,web_embedded") {
   return [
-    "--extractor-args", "youtube:player_client=default,web_embedded",
+    "--extractor-args", `youtube:player_client=${profile}`,
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno"
   ];
 }
 
-function runYtDlp(args, timeoutMs) {
+function runYtDlp(args, timeoutMs, profile = "default,web_embedded") {
   return new Promise((resolve, reject) => {
     const child = spawn(YTDLP, [
       "--no-warnings",
       "--no-progress",
       "--no-playlist",
       "--force-ipv4",
-      ...youtubeArgs(),
+      ...youtubeArgs(profile),
       ...args
     ], { stdio: ["ignore", "pipe", "pipe"] });
 
@@ -156,16 +156,35 @@ async function waitForPcm(ff, timeoutMs) {
 }
 
 async function resolveYouTubeUrl(track) {
-  const result = await runYtDlp([
-    "--get-url",
-    "--format", "bestaudio/best",
-    "--no-check-certificates",
-    track.url
-  ], RESOLVE_TIMEOUT);
+  const profiles = [
+    "web_embedded",
+    "default,web_embedded",
+    "mweb"
+  ];
+  let lastError = null;
 
-  const urls = result.stdout.split(/\r?\n/).map(clean).filter(v => /^https?:\/\//i.test(v));
-  if (!urls.length) throw new Error("yt-dlp returned no direct audio URL.");
-  return urls[urls.length - 1];
+  for (const profile of profiles) {
+    try {
+      const result = await runYtDlp([
+        "--get-url",
+        "--format", "bestaudio/best",
+        "--no-check-certificates",
+        track.url
+      ], RESOLVE_TIMEOUT, profile);
+
+      const urls = result.stdout.split(/\r?\n/).map(clean).filter(v => /^https?:\/\//i.test(v));
+      if (urls.length) {
+        console.log(`🔑 YouTube direct URL resolved with client profile: ${profile}`);
+        return urls[urls.length - 1];
+      }
+      lastError = new Error(`No URL from YouTube client ${profile}`);
+    } catch (error) {
+      lastError = error;
+      console.warn(`⚠️ YouTube client ${profile} failed: ${clean(error?.message || error).slice(-500)}`);
+    }
+  }
+
+  throw lastError || new Error("yt-dlp returned no direct audio URL.");
 }
 
 function retire(stream) {
