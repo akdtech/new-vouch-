@@ -180,7 +180,7 @@ async function resolveYouTubeUrl(track) {
         const headers = Object.entries(rawHeaders)
           .filter(([k, v]) => k && v)
           .map(([k, v]) => `${k}: ${v}`)
-          .join("\\r\\n") + "\\r\\n";
+          .join("\r\n") + "\r\n";
         console.log(`🔑 YouTube direct URL resolved with client profile: ${profile}`);
         return { url, headers };
       }
