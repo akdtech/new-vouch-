@@ -245,7 +245,7 @@ class DirectMusicManager {
     const base = "https://api.audius.co/v1";
     const endpoint = new URL(base + "/tracks/search");
     endpoint.searchParams.set("query", clean);
-    endpoint.searchParams.set("limit", "8");
+    endpoint.searchParams.set("limit", "25");
     endpoint.searchParams.set("sort_method", "relevant");
 
     const controller = new AbortController();
@@ -258,6 +258,12 @@ class DirectMusicManager {
       if (!response.ok) throw new Error("Music catalog returned HTTP " + response.status);
       const json = await response.json();
       const list = Array.isArray(json?.data) ? json.data : [];
+      const tokens = clean
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .split(/\s+/)
+        .filter(Boolean);
+
       const tracks = list.filter(t => t?.id).map(t => ({
         identifier: String(t.id),
         id: String(t.id),
@@ -269,9 +275,31 @@ class DirectMusicManager {
         requester: requester || this.client.user,
         thumbnail: t.artwork?.["480x480"] || t.artwork?.["150x150"] || null,
         source: "audius"
-      }));
-      if (!tracks.length) throw new Error("No playable track found for \"" + clean + "\" on the open music catalog.");
-      return { type: "track", tracks };
+      })).map(track => {
+        const title = track.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        const author = track.author.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        const haystack = title + " " + author;
+        const titleTokens = new Set(title.split(/\s+/).filter(Boolean));
+        const authorTokens = new Set(author.split(/\s+/).filter(Boolean));
+        const matched = tokens.filter(token => titleTokens.has(token) || authorTokens.has(token)).length;
+        const titleMatched = tokens.filter(token => titleTokens.has(token)).length;
+        const artistMatched = tokens.filter(token => authorTokens.has(token)).length;
+        const phrase = clean.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        let score = matched * 10 + titleMatched * 12 + artistMatched * 8;
+        if (title.includes(phrase)) score += 80;
+        if (haystack.includes(phrase)) score += 40;
+        if (title === phrase) score += 120;
+        return { ...track, _searchScore: score };
+      }).sort((a, b) => b._searchScore - a._searchScore);
+
+      if (!tracks.length || tracks[0]._searchScore < Math.max(10, tokens.length * 8)) {
+        throw new Error("No close match found for \"" + clean + "\" on the music catalog.");
+      }
+
+      return {
+        type: "track",
+        tracks: tracks.map(({ _searchScore, ...track }) => track)
+      };
     } finally {
       clearTimeout(timer);
     }
