@@ -30,6 +30,15 @@ const SEARCH_TIMEOUT = 12000;
 const RESOLVE_TIMEOUT = 14000;
 const PCM_TIMEOUT = 15000;
 const RECONNECT_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36";
+const INVIDIOUS = String(process.env.INVIDIOUS_API_URLS || [
+  "https://inv.nadeko.net",
+  "https://invidious.nerdvpn.de",
+  "https://yt.chocolatemoo53.com",
+  "https://invidious.tiekoetter.com",
+  "https://yewtu.be",
+  "https://yt.artemislena.eu",
+  "https://invidious.flokinet.to"
+].join(",")).split(",").map(v => v.trim().replace(/\\/+$/, "")).filter(Boolean);
 
 const clean = v => String(v || "").replace(/\s+/g, " ").trim();
 const idOf = t => t?.identifier || t?.id || t?.url || null;
@@ -155,6 +164,31 @@ async function waitForPcm(ff, timeoutMs) {
   });
 }
 
+async function getInvidiousStream(id) {
+  const jobs = INVIDIOUS.map(async base => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(`${base}/api/v1/videos/${encodeURIComponent(id)}?local=true`, {
+        headers: { accept: "application/json", "user-agent": "DEATH-Music-24-7/4.0" },
+        signal: controller.signal,
+        redirect: "follow"
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const formats = [...(data?.adaptiveFormats || []), ...(data?.formatStreams || [])];
+      const audio = formats
+        .filter(x => x?.url && String(x?.type || x?.mimeType || "").toLowerCase().includes("audio"))
+        .sort((a,b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))[0];
+      if (!audio?.url) throw new Error("no direct audio format");
+      return { base, url: audio.url };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+  return Promise.any(jobs);
+}
+
 async function resolveYouTubeUrl(track) {
   const profiles = [
     "web_embedded",
@@ -220,6 +254,17 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
       if (sourceUrl) console.log(`🚀 Final core selected Piped source for ${manager.getTrackTitle(track)}`);
     } catch (error) {
       console.warn(`⚠️ Piped source unavailable for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-500)}`);
+    }
+  }
+
+  if (!sourceUrl) {
+    try {
+      const inv = await getInvidiousStream(idOf(track));
+      sourceUrl = inv.url;
+      sourceName = `invidious:${inv.base}`;
+      console.log(`🛟 Final core selected Invidious source for ${manager.getTrackTitle(track)}`);
+    } catch (error) {
+      console.warn(`⚠️ Invidious source unavailable for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-400)}`);
     }
   }
 
