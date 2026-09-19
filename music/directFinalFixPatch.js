@@ -248,11 +248,11 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
     "--force-ipv4",
     "--retries", "1",
     "--fragment-retries", "1",
-    "--extractor-args", "youtube:player_client=tv;fetch_pot=never;use_ad_playback_context=false",
+    "--extractor-args", "youtube:player_client=web_safari;fetch_pot=auto;use_ad_playback_context=false",
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno",
-    "--format", "bestaudio/best",
+    "--format", "bestaudio[protocol*=m3u8]/bestaudio/best",
     "--output", "-",
     track.url
   ], { stdio: ["ignore", "pipe", "pipe"] });
@@ -538,7 +538,19 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   );
   const ff = spawn(FFMPEG, ffArgs, { stdio: ["pipe", "pipe", "pipe"] });
 
-  if (sourceName.startsWith("invidious:")) {\n    try {\n      const media = await fetch(sourceUrl, { headers: { "user-agent": RECONNECT_UA, accept: "*/*" }, redirect: "follow" });\n      if (!media.ok || !media.body) throw new Error(`Invidious media HTTP ${media.status}`);\n      Readable.fromWeb(media.body).pipe(ff.stdin);\n    } catch (error) {\n      kill(ff);\n      console.warn(`⚠️ Invidious stream fetch failed; trying SoundCloud: ${clean(error?.message || error).slice(-600)}`);\n      return await startSoundCloud(manager, guildId, track, startMs, token, handoff);\n    }\n  }\n\n  let first;
+  if (sourceName.startsWith("invidious:")) {
+    try {
+      const media = await fetch(sourceUrl, { headers: { "user-agent": RECONNECT_UA, accept: "*/*" }, redirect: "follow" });
+      if (!media.ok || !media.body) throw new Error(`Invidious media HTTP ${media.status}`);
+      Readable.fromWeb(media.body).pipe(ff.stdin);
+    } catch (error) {
+      kill(ff);
+      console.warn(`⚠️ Invidious stream fetch failed; trying SoundCloud: ${clean(error?.message || error).slice(-600)}`);
+      return await startSoundCloud(manager, guildId, track, startMs, token, handoff);
+    }
+  }
+
+  let first;
   try {
     first = await waitForPcm(ff, PCM_TIMEOUT);
   } catch (error) {
