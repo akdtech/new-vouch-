@@ -86,8 +86,8 @@ class DirectMusicManager {
       String(process.env.AUTOPLAY_DEFAULT ?? config.autoplayDefault ?? "true").toLowerCase() !== "false";
     this.defaultVolume = Math.max(1, Math.min(100, Number(process.env.DEFAULT_VOLUME || config.defaultVolume || 70)));
 
-    console.log("🎵 Direct music engine: @discordjs/voice + yt-dlp + FFmpeg");
-    console.log(`🎵 yt-dlp: ${YTDLP}`);
+    console.log("🎵 DEATH Music Engine v2: @discordjs/voice + FFmpeg + Audius/direct streams");
+    console.log("🚫 Lavalink/Kazagumo/YouTube extraction disabled.");
     console.log(`🎵 FFmpeg: ${FFMPEG}`);
 
     this.setupPlayerEvents();
@@ -226,32 +226,52 @@ class DirectMusicManager {
 
   async search(query, requester) {
     const clean = this.cleanQuery(query);
-    if (!clean) throw new Error("Please provide a song name or URL.");
+    if (!clean) throw new Error("Please provide a song name.");
 
-    if (this.isYouTubeUrl(clean)) {
-      const { stdout } = await this.runYtDlp([
-        "--dump-single-json",
-        "--skip-download",
-        "--no-playlist",
-        clean
-      ]);
-      const info = JSON.parse(stdout);
-      return { type: "track", tracks: [this.normalizeTrack(info, requester)] };
+    // Direct audio URLs are supported without any extractor.
+    if (/^https?:\\/\\//i.test(clean) && !/youtube\\.com|youtu\\.be/i.test(clean)) {
+      return {
+        type: "track",
+        tracks: [{
+          identifier: clean, id: clean, url: clean,
+          title: "Direct audio stream", author: "Direct URL",
+          length: 0, requester, source: "direct"
+        }]
+      };
     }
 
-    const { stdout } = await this.runYtDlp([
-      "--dump-single-json",
-      "--flat-playlist",
-      "ytsearch5:" + clean
-    ], 45000);
-    const data = JSON.parse(stdout);
-    const entries = Array.isArray(data?.entries) ? data.entries : [];
-    const tracks = entries
-      .filter(entry => entry?.id)
-      .map(entry => this.normalizeTrack(entry, requester));
+    const base = "https://discoveryprovider.audius.co/v1";
+    const endpoint = new URL(base + "/tracks/search");
+    endpoint.searchParams.set("query", clean);
+    endpoint.searchParams.set("limit", "8");
+    endpoint.searchParams.set("sort_method", "relevant");
 
-    if (!tracks.length) throw new Error(`Track not found for "${clean}".`);
-    return { type: "track", tracks };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(endpoint, {
+        signal: controller.signal,
+        headers: { "User-Agent": "DEATH-GMAO-Music/1.0" }
+      });
+      if (!response.ok) throw new Error("Music catalog returned HTTP " + response.status);
+      const json = await response.json();
+      const list = Array.isArray(json?.data) ? json.data : [];
+      const tracks = list.filter(t => t?.id).map(t => ({
+        identifier: String(t.id),
+        id: String(t.id),
+        url: base + "/tracks/" + encodeURIComponent(t.id) + "/stream",
+        title: t.title || "Unknown track",
+        author: t.user?.name || t.user?.handle || "Audius artist",
+        length: Number(t.duration || 0) * 1000,
+        requester: requester || this.client.user,
+        thumbnail: t.artwork?.["480x480"] || t.artwork?.["150x150"] || null,
+        source: "audius"
+      }));
+      if (!tracks.length) throw new Error("No playable track found for \"" + clean + "\" on the open music catalog.");
+      return { type: "track", tracks };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   normalizeTrack(info, requester) {
@@ -460,7 +480,6 @@ class DirectMusicManager {
   async startTrack(guildId, track, startMs = 0) {
     const state = this.getState(guildId);
     const player = this.players.get(guildId) || this.ensurePlayer(guildId);
-    this.bindPlayerEvents(guildId, player);
 
     this.destroyStream(guildId);
     state.current = track;
@@ -468,37 +487,29 @@ class DirectMusicManager {
     state.positionOffset = Math.max(0, Number(startMs || 0));
     state.paused = false;
 
-    const child = spawn(YTDLP, [
-      "--no-warnings",
-      "--no-progress",
-      "--js-runtimes", "node",
-      "--format", "bestaudio/best",
-      "--output", "-",
-      "--no-playlist",
-      track.url
+    // Clean engine: FFmpeg reads the source directly. No Lavalink,
+    // no Kazagumo, no YouTube extractor and no proxy chain.
+    const ff = spawn(FFMPEG, [
+      "-hide_banner", "-loglevel", "error",
+      "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+      "-i", track.url,
+      ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
+      "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
     ], { stdio: ["ignore", "pipe", "pipe"] });
 
-    const ff = spawn(FFMPEG, [
-      "-hide_banner",
-      "-loglevel", "error",
-      "-i", "pipe:0",
-      ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-      "-f", "s16le",
-      "-ar", "48000",
-      "-ac", "2",
-      "pipe:1"
-    ], { stdio: ["pipe", "pipe", "ignore"] });
+    this.streams.set(guildId, { ff });
 
-    this.streams.set(guildId, { yt: child, ff });
-    child.stdout.pipe(ff.stdin);
-
-    child.on("error", error => {
-      if (state.current === track) console.warn(`⚠️ yt-dlp stream error: ${error?.message || error}`);
+    let stderr = "";
+    ff.stderr.on("data", chunk => {
+      stderr += chunk.toString();
+      if (stderr.length > 2500) stderr = stderr.slice(-2500);
     });
-    child.on("close", code => {
-      if (code !== 0 && state.current === track) console.warn(`⚠️ yt-dlp ended with code ${code}.`);
+    ff.on("error", error => console.warn("⚠️ FFmpeg error:", error?.message || error));
+    ff.on("close", code => {
+      if (code !== 0 && state.current === track) {
+        console.warn("⚠️ FFmpeg source ended:", code, stderr.trim().split("\\n").slice(-2).join(" "));
+      }
     });
-    ff.on("error", error => console.warn(`⚠️ FFmpeg error: ${error?.message || error}`));
 
     const resource = createAudioResource(ff.stdout, {
       inputType: StreamType.Raw,
@@ -509,7 +520,7 @@ class DirectMusicManager {
     player.play(resource);
 
     await this.refreshPanel(guildId).catch(() => {});
-    console.log(`▶️ Direct playback started: ${track.title}`);
+    console.log("▶️ CLEAN PLAYBACK STARTED:", track.title, "[" + track.source + "]");
   }
 
   destroyStream(guildId) {
