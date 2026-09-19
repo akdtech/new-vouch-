@@ -97,7 +97,7 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
       state.startedAt = 0;
       state.positionOffset = 0;
       Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
-      Promise.resolve(this.startTrack(guildId, next)).catch(error => {
+      Promise.resolve(this.startTrack(guildId, next, 0, { handoff: true })).catch(error => {
         state.transitioning = false;
         console.warn(`⚠️ Fast skip next track failed: ${error?.message || error}`);
         if (state.autoplay && !state.intentionalLeave) {
