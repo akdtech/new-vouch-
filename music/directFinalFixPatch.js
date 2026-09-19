@@ -248,11 +248,11 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
     "--force-ipv4",
     "--retries", "1",
     "--fragment-retries", "1",
-    "--extractor-args", "youtube:player_client=mweb;fetch_pot=always;use_ad_playback_context=false",
+    "--extractor-args", "youtube:player_client=web_safari;fetch_pot=auto;use_ad_playback_context=false",
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno",
-    "--format", "bestaudio/best",
+    "--format", "bestaudio[protocol*=m3u8]/bestaudio/best",
     "--output", "-",
     track.url
   ], { stdio: ["ignore", "pipe", "pipe"] });
