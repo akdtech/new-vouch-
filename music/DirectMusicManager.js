@@ -270,6 +270,7 @@ class DirectMusicManager {
       const remixRequested = /\b(remix|remixed|edit|mix|mashup|bootleg|rework|version|live|acoustic|instrumental|sped up|slowed|nightcore|8d)\b/i.test(clean);
 
       const unwantedVariants = /\b(remix|remastered|sped[\s-]*up|slowed(?:\s*(?:and|\&)\s*reverb)?|nightcore|8d|edit|mashup|bootleg|rework|instrumental|karaoke|cover|tribute|live|acoustic|piano|lofi|lo[- ]?fi|bass boosted|slowed\s*\+\s*reverb)\b/i;
+      const unwantedCompilations = /\b(yt5s|youtube|playlist|playlists|compilation|compilations|mix(?:es)?|meg[a\s-]?mix|full album|album mix|top .* songs|best .* songs|latest .* songs|new .* songs|all .* songs|collection|nonstop|continuous|1 hour|2 hour|3 hour|hour mix|bollywood latest songs|bollywood romantic love songs)\b/i;
 
       const tracks = list.filter(t => t?.id).map(t => ({
         identifier: String(t.id),
@@ -283,7 +284,7 @@ class DirectMusicManager {
         thumbnail: t.artwork?.["480x480"] || t.artwork?.["150x150"] || null,
         source: "audius"
       }))
-      .filter(track => remixRequested || !unwantedVariants.test(track.title))
+      .filter(track => !unwantedCompilations.test(track.title) && (remixRequested || !unwantedVariants.test(track.title)))
       .map(track => {
         const title = normalize(track.title);
         const author = normalize(track.author);
@@ -295,6 +296,7 @@ class DirectMusicManager {
         const exactTitle = title === queryText;
         const phraseInTitle = title.includes(queryText);
         const variant = unwantedVariants.test(track.title);
+        const compilation = unwantedCompilations.test(track.title);
 
         // Strongly prefer an actual song-title match. Artist matches help
         // identify queries such as "Risk It All Bruno Mars", but artist-only
@@ -307,6 +309,7 @@ class DirectMusicManager {
         // Remix/cover/edit variants are excluded by default above. If the
         // user explicitly asks for one, allow it but keep the normal ranking.
         if (variant && !remixRequested) score -= 250;
+        if (compilation) score -= 1000;
 
         return { ...track, _searchScore: score };
       })
@@ -665,13 +668,25 @@ class DirectMusicManager {
         const candidates = result.tracks.filter(t => {
           const length = Number(t.length || 0);
           const id = this.getTrackId(t);
+          const title = String(t.title || "");
           if (!t.url || !id || recent.has(id)) return false;
           if (context?.id && id === context.id) return false;
+          if (/\b(yt5s|youtube|playlist|compilation|meg[a\s-]?mix|full album|album mix|nonstop|continuous|\d+\s*hour|hour mix|top .* songs|best .* songs|latest .* songs|new .* songs|all .* songs|collection)\b/i.test(title)) return false;
           return length > 0 && length <= 8 * 60 * 1000;
+        }).sort((a, b) => {
+          const aAuthor = String(a.author || "").toLowerCase();
+          const bAuthor = String(b.author || "").toLowerCase();
+          const wantedAuthor = String(context?.author || "").toLowerCase();
+          const aSameArtist = wantedAuthor && aAuthor === wantedAuthor ? 1 : 0;
+          const bSameArtist = wantedAuthor && bAuthor === wantedAuthor ? 1 : 0;
+          if (aSameArtist !== bSameArtist) return bSameArtist - aSameArtist;
+          return Number(b.playCount || 0) - Number(a.playCount || 0);
         });
 
         if (candidates.length) {
-          chosen = candidates[Math.floor(Math.random() * Math.min(candidates.length, 5))];
+          // Play exactly one normal track at a time. Never enqueue or select
+          // a playlist/compilation/mix as the next track.
+          chosen = candidates[0];
           break;
         }
       }
