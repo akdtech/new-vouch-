@@ -20,6 +20,8 @@ const { spawn } = require("node:child_process");
 const { PassThrough } = require("node:stream");
 const { createAudioResource, StreamType, AudioPlayerStatus } = require("@discordjs/voice");
 const MusicManager = require("./DirectMusicManager");
+let getPipedStream = null;
+try { ({ getPipedStream } = require("./directPipedPlaybackPatch")); } catch {}
 
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
@@ -178,14 +180,30 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   const player = manager.players.get(guildId) || manager.ensurePlayer(guildId);
   manager.bindPlayerEvents(guildId, player);
 
-  const mediaUrl = await resolveYouTubeUrl(track);
+  let sourceUrl = null;
+  let sourceName = "youtube";
+
+  // Piped is attempted first because it can hand us a server-side audio URL
+  // without exposing the Railway IP to YouTube's normal yt-dlp download path.
+  if (typeof getPipedStream === "function") {
+    try {
+      const piped = await getPipedStream(idOf(track));
+      sourceUrl = piped?.url || null;
+      sourceName = `piped:${piped?.base || "instance"}`;
+      if (sourceUrl) console.log(`🚀 Final core selected Piped source for ${manager.getTrackTitle(track)}`);
+    } catch (error) {
+      console.warn(`⚠️ Piped source unavailable for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-500)}`);
+    }
+  }
+
+  if (!sourceUrl) sourceUrl = await resolveYouTubeUrl(track);
   if (state.playbackToken !== token) throw new Error("playback attempt superseded");
 
   const ff = spawn(FFMPEG, [
     "-hide_banner", "-loglevel", "error", "-nostdin",
     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
     "-user_agent", RECONNECT_UA,
-    "-i", mediaUrl,
+    "-i", sourceUrl,
     ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
     "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
   ], { stdio: ["ignore", "pipe", "pipe"] });
@@ -224,7 +242,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
 
   safeStatus(manager, guildId, track, "Playing");
   safePanel(manager, guildId);
-  console.log(`🎵 FINAL playback started: ${manager.getTrackTitle(track)}`);
+  console.log(`🎵 FINAL playback started: ${manager.getTrackTitle(track)} via ${sourceName}`);
   return true;
 }
 
@@ -327,44 +345,41 @@ function install() {
     this.bindPlayerEvents(guildId, player);
 
     const result = await this.search(args.query, args.requester || this.client.user);
-    const track = result?.tracks?.[0];
-    if (!track) throw new Error(`Track not found for "${args.query}".`);
-
-    track.isAutoplay = false;
+    const tracks = Array.isArray(result?.tracks) ? result.tracks.slice(0, 5) : [];
+    if (!tracks.length) throw new Error(`Track not found for "${args.query}".`);
 
     const live = player.state?.resource?.metadata || state.current;
     const playing = Boolean(live && player.state.status !== AudioPlayerStatus.Idle);
+    let lastError = null;
 
-    // Manual music always wins. If something is playing, replace it atomically
-    // after the new stream has produced PCM.
+    // Try several search results. One YouTube upload can be blocked while the
+    // next official/Topic upload is perfectly playable.
+    for (const track of tracks) {
+      track.isAutoplay = false;
+      try {
+        await this.startTrack(guildId, track, 0, { handoff: playing });
+        state.autoplayContext = {
+          artist: clean(track.author),
+          title: clean(track.title),
+          query: clean(args.query),
+          words: clean(`${track.title} ${args.query}`).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
+        };
+        state.autoplayBlockedUntil = 0;
+        safePanel(this, guildId);
+        return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: true, queued: false };
+      } catch (error) {
+        lastError = error;
+        console.warn(`⚠️ Manual source failed; trying next result: ${clean(track.title)} — ${clean(error?.message || error).slice(-500)}`);
+      }
+    }
+
+    // If all sources failed, keep the current resource alive rather than
+    // replacing it with a dead state.
     if (playing) {
-      await this.startTrack(guildId, track, 0, { handoff: true });
-      state.autoplayContext = {
-        artist: clean(track.author),
-        title: clean(track.title),
-        query: clean(args.query),
-        words: clean(`${track.title} ${args.query}`).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
-      };
-      state.autoplayBlockedUntil = 0;
+      state.transitioning = false;
       safePanel(this, guildId);
-      return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: true, queued: false };
     }
-
-    if (!state.current && player.state.status === AudioPlayerStatus.Idle) {
-      await this.startTrack(guildId, track, 0, { handoff: false });
-      state.autoplayContext = {
-        artist: clean(track.author),
-        title: clean(track.title),
-        query: clean(args.query),
-        words: clean(`${track.title} ${args.query}`).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
-      };
-      state.autoplayBlockedUntil = 0;
-      return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: true, queued: false };
-    }
-
-    state.queue.push(track);
-    safePanel(this, guildId);
-    return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: false, queued: true };
+    throw lastError || new Error("No playable source was found for that search.");
   };
 
   MusicManager.prototype.autoplayNext = async function finalAutoplayNext(guildId) {
@@ -408,20 +423,32 @@ function install() {
 
       if (!candidates.length) throw new Error("No autoplay candidates were found.");
 
-      const chosen = candidates[0];
-      chosen.isAutoplay = true;
-      chosen.autoplayGroup = clean(ctx.artist) ? `Related to ${ctx.artist}` : "Popular music";
-
-      const id = idOf(chosen);
-      state.recent = id ? [...state.recent, id].slice(-20) : state.recent;
-
-      await this.startTrack(guildId, chosen, 0, { handoff: false });
-      state.autoplayBlockedUntil = 0;
-      state.transitioning = false;
-      safeStatus(this, guildId, chosen, "Autoplay");
-      safePanel(this, guildId);
-      console.log(`🎯 FINAL AUTOPLAY: ${chosen.title} — ${chosen.author || "Unknown artist"}`);
-      return true;
+      let lastError = null;
+      for (const chosen of candidates.slice(0, 6)) {
+        chosen.isAutoplay = true;
+        chosen.autoplayGroup = clean(ctx.artist) ? `Related to ${ctx.artist}` : "Popular music";
+        try {
+          await this.startTrack(guildId, chosen, 0, { handoff: false });
+          const id = idOf(chosen);
+          state.recent = id ? [...state.recent, id].slice(-20) : state.recent;
+          state.autoplayBlockedUntil = 0;
+          state.transitioning = false;
+          state.autoplayContext = {
+            artist: clean(chosen.author || ctx.artist),
+            title: clean(chosen.title),
+            query: clean(chosen.title),
+            words: clean(chosen.title).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
+          };
+          safeStatus(this, guildId, chosen, "Autoplay");
+          safePanel(this, guildId);
+          console.log(`🎯 FINAL AUTOPLAY: ${chosen.title} — ${chosen.author || "Unknown artist"}`);
+          return true;
+        } catch (error) {
+          lastError = error;
+          console.warn(`⚠️ Autoplay candidate failed; trying next: ${clean(chosen.title)} — ${clean(error?.message || error).slice(-500)}`);
+        }
+      }
+      throw lastError || new Error("No autoplay source could be started.");
     } catch (error) {
       state.transitioning = false;
       state.current = null;
