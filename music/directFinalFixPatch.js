@@ -17,7 +17,7 @@
  * - atomic manual /play and skip handoffs
  */
 const { spawn } = require("node:child_process");
-const { PassThrough } = require("node:stream");
+const { PassThrough, Readable } = require("node:stream");
 const { createAudioResource, StreamType, AudioPlayerStatus } = require("@discordjs/voice");
 const MusicManager = require("./DirectMusicManager");
 let getPipedStream = null;
@@ -536,9 +536,9 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
   "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
   );
-  const ff = spawn(FFMPEG, ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  const ff = spawn(FFMPEG, ffArgs, { stdio: ["pipe", "pipe", "pipe"] });
 
-  let first;
+  if (sourceName.startsWith("invidious:")) {\n    try {\n      const media = await fetch(sourceUrl, { headers: { "user-agent": RECONNECT_UA, accept: "*/*" }, redirect: "follow" });\n      if (!media.ok || !media.body) throw new Error(`Invidious media HTTP ${media.status}`);\n      Readable.fromWeb(media.body).pipe(ff.stdin);\n    } catch (error) {\n      kill(ff);\n      console.warn(`⚠️ Invidious stream fetch failed; trying SoundCloud: ${clean(error?.message || error).slice(-600)}`);\n      return await startSoundCloud(manager, guildId, track, startMs, token, handoff);\n    }\n  }\n\n  let first;
   try {
     first = await waitForPcm(ff, PCM_TIMEOUT);
   } catch (error) {
