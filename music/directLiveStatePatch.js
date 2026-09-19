@@ -1,0 +1,77 @@
+"use strict";
+
+/* DEATH live-state guardian: Discord player state drives panel/status continuously. */
+const MusicManager = require("./DirectMusicManager");
+const { AudioPlayerStatus } = require("@discordjs/voice");
+
+if (!MusicManager.prototype.__deathLiveStateGuardian) {
+  MusicManager.prototype.__deathLiveStateGuardian = true;
+
+  const originalEnsurePlayer = MusicManager.prototype.ensurePlayer;
+  MusicManager.prototype.ensurePlayer = function guardedEnsurePlayer(guildId) {
+    const player = originalEnsurePlayer.call(this, guildId);
+    if (player.__deathGuardianBound) return player;
+    player.__deathGuardianBound = true;
+
+    const refresh = () => Promise.resolve(this.refreshPanel?.(guildId)).catch(() => {});
+    const status = text => Promise.resolve(this.updateVoiceStatus?.(guildId, text)).catch(() => {});
+
+    player.on(AudioPlayerStatus.Playing, () => {
+      const track = player.state?.resource?.metadata;
+      if (!track) return;
+      const state = this.getState(guildId);
+      state.current = track;
+      state.pendingTrack = null;
+      state.transitioning = false;
+      state.paused = false;
+      state.startedAt = state.startedAt || Date.now();
+      this.updatePresence(track);
+      status("🎵 " + this.getTrackTitle(track));
+      refresh();
+    });
+
+    player.on(AudioPlayerStatus.Paused, () => {
+      const state = this.getState(guildId);
+      state.paused = true;
+      state.positionOffset = this.getPosition(guildId);
+      status("⏸️ Paused • " + (state.current ? this.getTrackTitle(state.current) : "DEATH Music 24/7"));
+      refresh();
+    });
+
+    player.on(AudioPlayerStatus.AutoPaused, () => {
+      const state = this.getState(guildId);
+      state.paused = true;
+      status("⏸️ Paused • " + (state.current ? this.getTrackTitle(state.current) : "DEATH Music 24/7"));
+      refresh();
+    });
+
+    player.on(AudioPlayerStatus.Idle, () => {
+      setTimeout(() => {
+        const state = this.getState(guildId);
+        if (state.transitioning) return;
+        const live = player.state?.resource?.metadata;
+        if (live) {
+          state.current = live;
+          refresh();
+          return;
+        }
+        state.current = null;
+        state.pendingTrack = null;
+        state.paused = false;
+        state.startedAt = 0;
+        state.positionOffset = 0;
+        status(state.autoplay && !state.intentionalLeave ? "♾️ Autoplay ready • DEATH Music 24/7" : "⏹️ Ready • DEATH Music 24/7");
+        refresh();
+      }, 150);
+    });
+
+    player.on("error", error => {
+      console.error(`❌ Live audio guardian error [${guildId}]: ${error?.message || error}`);
+      refresh();
+    });
+
+    return player;
+  };
+
+  console.log("🧭 DEATH live-state guardian loaded: Playing/Paused/Idle/error all synchronize panel and voice status.");
+}
