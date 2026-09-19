@@ -243,21 +243,53 @@ class DirectMusicManager {
     }
 
     const base = "https://api.audius.co/v1";
-    const endpoint = new URL(base + "/tracks/search");
-    endpoint.searchParams.set("query", clean);
-    endpoint.searchParams.set("limit", "50");
-    endpoint.searchParams.set("sort_method", "relevant");
+    const searchQueries = [clean];
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      // Audius can miss a valid track when title + artist are submitted
+      // together. Retry the meaningful parts separately and merge results.
+      for (let i = 0; i < words.length; i++) {
+        if (words[i].length >= 3) {
+          const q = words[i];
+          if (!searchQueries.some(existing => existing.toLowerCase() === q.toLowerCase())) searchQueries.push(q);
+        }
+      }
+      if (words.length >= 3) {
+        const half = Math.ceil(words.length / 2);
+        const first = words.slice(0, half).join(" ");
+        const last = words.slice(half).join(" ");
+        if (first.length >= 3 && !searchQueries.includes(first)) searchQueries.push(first);
+        if (last.length >= 3 && !searchQueries.includes(last)) searchQueries.push(last);
+      }
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 12000);
     try {
-      const response = await fetch(endpoint, {
-        signal: controller.signal,
-        headers: { "User-Agent": "DEATH-GMAO-Music/1.0" }
+      const allResults = [];
+      for (const searchQuery of searchQueries.slice(0, 7)) {
+        const endpoint = new URL(base + "/tracks/search");
+        endpoint.searchParams.set("query", searchQuery);
+        endpoint.searchParams.set("limit", "50");
+        endpoint.searchParams.set("sort_method", "relevant");
+        try {
+          const response = await fetch(endpoint, {
+            signal: controller.signal,
+            headers: { "User-Agent": "DEATH-GMAO-Music/1.0" }
+          });
+          if (!response.ok) continue;
+          const json = await response.json();
+          if (Array.isArray(json?.data)) allResults.push(...json.data);
+        } catch (error) {
+          if (error?.name === "AbortError") throw error;
+        }
+      }
+      const seenRaw = new Set();
+      const list = allResults.filter(t => {
+        if (!t?.id || seenRaw.has(String(t.id))) return false;
+        seenRaw.add(String(t.id));
+        return true;
       });
-      if (!response.ok) throw new Error("Music catalog returned HTTP " + response.status);
-      const json = await response.json();
-      const list = Array.isArray(json?.data) ? json.data : [];
 
       const normalize = value => String(value || "")
         .toLowerCase()
