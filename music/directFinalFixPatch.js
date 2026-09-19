@@ -17,7 +17,8 @@
  * - atomic manual /play and skip handoffs
  */
 const { spawn } = require("node:child_process");
-const { PassThrough, Readable } = require("node:stream");
+const fs = require("node:fs");
+const { PassThrough } = require("node:stream");
 const { createAudioResource, StreamType, AudioPlayerStatus } = require("@discordjs/voice");
 const MusicManager = require("./DirectMusicManager");
 let getPipedStream = null;
@@ -26,6 +27,11 @@ try { ({ getPipedStream } = require("./directPipedPlaybackPatch")); } catch {}
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
 const POT = process.env.YTDLP_POT_PROVIDER_URL || "http://bgutil-pot.railway.internal:4416";
+const COOKIE_FILE = process.env.YOUTUBE_COOKIES_PATH || "/tmp/youtube-cookies.txt";
+try {
+  if (process.env.YOUTUBE_COOKIES_B64) fs.writeFileSync(COOKIE_FILE, Buffer.from(process.env.YOUTUBE_COOKIES_B64, "base64"), { mode: 0o600 });
+} catch {}
+const cookieArgs = () => { try { return fs.existsSync(COOKIE_FILE) ? ["--cookies", COOKIE_FILE] : []; } catch { return []; } };
 const SEARCH_TIMEOUT = 12000;
 const RESOLVE_TIMEOUT = 14000;
 const PCM_TIMEOUT = 15000;
@@ -37,14 +43,7 @@ const INVIDIOUS = String(process.env.INVIDIOUS_API_URLS || [
   "https://invidious.tiekoetter.com",
   "https://yewtu.be",
   "https://yt.artemislena.eu",
-  "https://invidious.flokinet.to",
-  "https://invidious.f5.si",
-  "https://inv.tux.pizza",
-  "https://invidious.privacydev.net",
-  "https://iv.melmac.space",
-  "https://invidious.private.coffee",
-  "https://invidious.protokolla.fi",
-  "https://iv.ggtyler.dev"
+  "https://invidious.flokinet.to"
 ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
 
 const clean = v => String(v || "").replace(/\s+/g, " ").trim();
@@ -67,6 +66,7 @@ function runYtDlp(args, timeoutMs, profile = "default,web_embedded") {
       "--no-progress",
       "--no-playlist",
       "--force-ipv4",
+      ...cookieArgs(),
       ...youtubeArgs(profile),
       ...args
     ], { stdio: ["ignore", "pipe", "pipe"] });
@@ -174,52 +174,24 @@ async function waitForPcm(ff, timeoutMs) {
 async function getInvidiousStream(id) {
   const jobs = INVIDIOUS.map(async base => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 9000);
+    const timer = setTimeout(() => controller.abort(), 5000);
     try {
-      const proxyUrl = base + "/latest_version/" + encodeURIComponent(id) + "?local=true";
-      const proxy = await fetch(proxyUrl, {
-        headers: { accept: "audio/*,video/*,*/*", "user-agent": RECONNECT_UA },
+      const response = await fetch(`${base}/api/v1/videos/${encodeURIComponent(id)}?local=true`, {
+        headers: { accept: "application/json", "user-agent": "DEATH-Music-24-7/4.0" },
         signal: controller.signal,
         redirect: "follow"
       });
-      const type = String(proxy.headers.get("content-type") || "").toLowerCase();
-      if (proxy.ok && proxy.body && !type.includes("text/html") && !type.includes("application/json")) {
-        return { base, url: proxyUrl, body: proxy.body };
-      }
-      if (proxy.body) { try { await proxy.body.cancel(); } catch {} }
-      throw new Error("proxy HTTP " + proxy.status + " type " + type);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const formats = [...(data?.adaptiveFormats || []), ...(data?.formatStreams || [])];
+      const audio = formats
+        .filter(x => x?.url && String(x?.type || x?.mimeType || "").toLowerCase().includes("audio"))
+        .sort((a,b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))[0];
+      if (!audio?.url) throw new Error("no direct audio format");
+      return { base, url: audio.url };
     } finally {
       clearTimeout(timer);
     }
-  });
-  return Promise.any(jobs);
-}
-
-async function getCobaltStream(track) {
-  const endpoints = String(process.env.COBALT_API_URLS || "https://cobalt-api.meowing.de,https://cobalt-backend.canine.tools,https://capi.3kh0.net")
-    .split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
-  const jobs = endpoints.map(async base => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
-    try {
-      const r = await fetch(base + "/", {
-        method: "POST",
-        headers: { accept: "application/json", "content-type": "application/json", "user-agent": "DEATH-Music-24-7/1.0" },
-        body: JSON.stringify({ url: track.url, downloadMode: "audio", audioFormat: "best", audioBitrate: "128", alwaysProxy: true, disableMetadata: true }),
-        signal: controller.signal
-      });
-      if (!r.ok) throw new Error("Cobalt HTTP " + r.status);
-      const data = await r.json();
-      const target = data?.url;
-      if (!target || !["tunnel","redirect","stream","success"].includes(String(data?.status || ""))) throw new Error("Cobalt returned no stream");
-      const mediaController = new AbortController();
-      const mediaTimer = setTimeout(() => mediaController.abort(), 10000);
-      try {
-        const media = await fetch(target, { headers: { accept: "*/*", "user-agent": RECONNECT_UA }, signal: mediaController.signal, redirect: "follow" });
-        if (!media.ok || !media.body) throw new Error("Cobalt media HTTP " + media.status);
-        return { base, url: target, body: media.body };
-      } finally { clearTimeout(mediaTimer); }
-    } finally { clearTimeout(timer); }
   });
   return Promise.any(jobs);
 }
@@ -281,13 +253,14 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
     "--no-progress",
     "--no-playlist",
     "--force-ipv4",
+    ...cookieArgs(),
     "--retries", "1",
     "--fragment-retries", "1",
-    "--extractor-args", "youtube:player_client=web_safari;fetch_pot=auto;use_ad_playback_context=false",
+    "--extractor-args", "youtube:player_client=mweb;fetch_pot=always;use_ad_playback_context=false",
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno",
-    "--format", "bestaudio[protocol*=m3u8]/bestaudio/best",
+    "--format", "bestaudio/best",
     "--output", "-",
     track.url
   ], { stdio: ["ignore", "pipe", "pipe"] });
@@ -516,7 +489,6 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
 
   let sourceUrl = null;
   let sourceHeaders = "";
-  let sourceBody = null;
   let sourceName = "youtube";
 
   // Piped is attempted first because it can hand us a server-side audio URL
@@ -534,21 +506,8 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
 
   if (!sourceUrl) {
     try {
-      const cobalt = await getCobaltStream(track);
-      sourceUrl = cobalt.url;
-      sourceBody = cobalt.body || null;
-      sourceName = `cobalt:${cobalt.base}`;
-      console.log(`🟣 Cobalt source selected for ${manager.getTrackTitle(track)} via ${cobalt.base}`);
-    } catch (error) {
-      console.warn(`⚠️ Cobalt source unavailable for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-400)}`);
-    }
-  }
-
-  if (!sourceUrl) {
-    try {
       const inv = await getInvidiousStream(idOf(track));
       sourceUrl = inv.url;
-      sourceBody = inv.body || null;
       sourceName = `invidious:${inv.base}`;
       console.log(`🛟 Final core selected Invidious source for ${manager.getTrackTitle(track)}`);
     } catch (error) {
@@ -581,24 +540,11 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
     "-user_agent", RECONNECT_UA
   ];
   if (sourceHeaders) ffArgs.push("-headers", sourceHeaders);
-  ffArgs.push("-i", sourceName.startsWith("invidious:") ? "pipe:0" : sourceUrl,
+  ffArgs.push("-i", sourceUrl,
   ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
   "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
   );
-  const ff = spawn(FFMPEG, ffArgs, { stdio: ["pipe", "pipe", "pipe"] });
-
-  if (sourceName.startsWith("invidious:") || sourceName.startsWith("cobalt:")) {
-    try {
-      const media = await fetch(sourceUrl, { headers: { "user-agent": RECONNECT_UA, accept: "*/*" }, redirect: "follow" });
-      if (!media.ok || !media.body) throw new Error(`Invidious media HTTP ${media.status}`);
-      if (!sourceBody) throw new Error("Invidious media body unavailable");
-      Readable.fromWeb(sourceBody).pipe(ff.stdin);
-    } catch (error) {
-      kill(ff);
-      console.warn(`⚠️ Invidious stream fetch failed; trying SoundCloud: ${clean(error?.message || error).slice(-600)}`);
-      return await startSoundCloud(manager, guildId, track, startMs, token, handoff);
-    }
-  }
+  const ff = spawn(FFMPEG, ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
   let first;
   try {
