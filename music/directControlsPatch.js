@@ -64,10 +64,9 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
       const next = state.queue.shift();
       if (next) {
         state.transitioning = true;
-        state.current = next;
+        state.pendingTrack = next;
         state.startedAt = 0;
         state.positionOffset = 0;
-        Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
         Promise.resolve(this.startTrack(guildId, next, 0, { handoff: true })).catch(error => {
           state.transitioning = false;
           console.warn(`⚠️ Skip recovery failed: ${error?.message || error}`);
@@ -93,10 +92,9 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
     // startTrack() performs an atomic Discord audio-resource handoff once real PCM exists.
     const next = state.queue.shift();
     if (next) {
-      state.current = next;
+      state.pendingTrack = next;
       state.startedAt = 0;
       state.positionOffset = 0;
-      Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
       Promise.resolve(this.startTrack(guildId, next, 0, { handoff: true })).catch(error => {
         state.transitioning = false;
         console.warn(`⚠️ Fast skip next track failed: ${error?.message || error}`);
