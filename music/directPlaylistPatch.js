@@ -118,4 +118,5 @@ MusicManager.prototype.playlistPlay = async function(guildId, name) {
 
 console.log("📚 DEATH playlists loaded: persistent PostgreSQL music libraries.");
 
-// FINAL PATCH MUST LOAD LAST so it owns search/playback/autoplay truth.\nrequire("./directFinalFixPatch");\n
+// FINAL PATCH MUST LOAD LAST so it owns search/playback/autoplay truth.
+require("./directFinalFixPatch");
