@@ -38,7 +38,7 @@ const INVIDIOUS = String(process.env.INVIDIOUS_API_URLS || [
   "https://yewtu.be",
   "https://yt.artemislena.eu",
   "https://invidious.flokinet.to"
-].join(",")).split(",").map(v => v.trim().replace(/\\/+$/, "")).filter(Boolean);
+].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
 
 const clean = v => String(v || "").replace(/\s+/g, " ").trim();
 const idOf = t => t?.identifier || t?.id || t?.url || null;
@@ -46,7 +46,7 @@ const kill = p => { try { p?.kill("SIGKILL"); } catch {} };
 
 function youtubeArgs(profile = "default,web_embedded") {
   return [
-    "--extractor-args", `youtube:player_client=${profile}`,
+    "--extractor-args", `youtube:player_client=${profile};fetch_pot=always;use_ad_playback_context=false`,
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno"
