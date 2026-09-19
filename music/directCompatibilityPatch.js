@@ -24,16 +24,34 @@ MusicManager.prototype.ensure247 = async function ensure247(guildId) {
 // Discord voice can take several seconds to finish its gateway/UDP handshake.
 const originalEnsureConnection = MusicManager.prototype.ensureConnection;
 MusicManager.prototype.ensureConnection = async function ensureConnection(guildId, voiceId) {
-  try {
-    return await originalEnsureConnection.call(this, guildId, voiceId);
-  } catch (error) {
-    const connection = this.connections.get(guildId);
-    if (connection && connection.state.status !== "destroyed") {
-      console.warn(`⚠️ Voice handshake still in progress [${guildId}]: ${error?.message || error}`);
+  let lastError = null;
+
+  // Never treat a signalling/handshaking voice connection as usable.
+  // Starting an AudioPlayer before Discord Voice is READY can consume the
+  // PCM stream while no voice packets are being delivered, which looks like
+  // "Playing" in Discord but produces silence.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const connection = await originalEnsureConnection.call(this, guildId, voiceId);
+      if (connection?.state?.status !== "ready") {
+        throw new Error(`Voice connection is not READY (status: ${connection?.state?.status || "unknown"}).`);
+      }
+      const player = this.players.get(guildId);
+      if (player && !player.playable?.length) {
+        try { connection.subscribe(player); } catch {}
+      }
       return connection;
+    } catch (error) {
+      lastError = error;
+      const connection = this.connections.get(guildId);
+      console.warn(`⚠️ Voice handshake attempt ${attempt}/3 failed [${guildId}]: ${error?.message || error}`);
+      try { connection?.destroy(); } catch {}
+      this.connections.delete(guildId);
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 1200 * attempt));
     }
-    throw error;
   }
+
+  throw lastError || new Error("Discord voice connection did not become READY.");
 };
 
 MusicManager.prototype.skip = async function skip(guildId) {
