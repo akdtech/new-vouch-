@@ -12,7 +12,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg chromium curl ca-certificates python3 python3-pip unzip \
     && curl -L --fail --silent --show-error https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod 755 /usr/local/bin/yt-dlp \
-    && python3 -m pip install --no-cache-dir --break-system-packages -U yt-dlp-getpot-wpc \
+    && python3 -m pip install --no-cache-dir --break-system-packages -U bgutil-ytdlp-pot-provider==2.0.0 yt-dlp-getpot-wpc \
     && curl -L --fail --silent --show-error https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip \
     && unzip -q /tmp/deno.zip -d /tmp/deno \
     && install -m 755 /tmp/deno/deno /usr/local/bin/deno \
