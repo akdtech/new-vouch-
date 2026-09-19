@@ -204,7 +204,9 @@ function install(Manager) {
     const state = this.getState(guildId), previous = state.current;
     const handoff = options?.handoff !== false;
     const token = Number(state.playbackToken || 0) + 1;
-    state.playbackToken = token; state.current = track; state.transitioning = true;
+    state.playbackToken = token;
+    state.pendingTrack = track;
+    state.transitioning = true;
     const failures = [];
 
     try { await startInvidious(this, guildId, track, startMs, token, handoff); return true; }
