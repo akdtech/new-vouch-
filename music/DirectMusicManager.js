@@ -229,7 +229,7 @@ class DirectMusicManager {
     if (!clean) throw new Error("Please provide a song name.");
 
     // Direct audio URLs are supported without any extractor.
-    if (/^https?:\\/\\//i.test(clean) && !/youtube\\.com|youtu\\.be/i.test(clean)) {
+    if (/^https?:\/\//i.test(clean) && !/youtube\.com|youtu\.be/i.test(clean)) {
       return {
         type: "track",
         tracks: [{
