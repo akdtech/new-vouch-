@@ -34,4 +34,4 @@ COPY . .
 
 EXPOSE 3000
 
-CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directInvidiousFallbackPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
+CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directPipedPlaybackPatch.js", "-r", "./music/directInvidiousFallbackPatch.js", "-r", "./music/directPipedSearchPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directLiveStatePatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
