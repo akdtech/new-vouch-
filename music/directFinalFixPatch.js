@@ -174,33 +174,20 @@ async function waitForPcm(ff, timeoutMs) {
 async function getInvidiousStream(id) {
   const jobs = INVIDIOUS.map(async base => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 7000);
+    const timer = setTimeout(() => controller.abort(), 9000);
     try {
-      const response = await fetch(base + "/api/v1/videos/" + encodeURIComponent(id) + "?local=true", {
-        headers: { accept: "application/json", "user-agent": RECONNECT_UA },
+      const proxyUrl = base + "/latest_version/" + encodeURIComponent(id) + "?local=true";
+      const proxy = await fetch(proxyUrl, {
+        headers: { accept: "audio/*,video/*,*/*", "user-agent": RECONNECT_UA },
         signal: controller.signal,
         redirect: "follow"
       });
-      if (!response.ok) throw new Error("API HTTP " + response.status);
-      const data = await response.json();
-      const formats = [...(data?.adaptiveFormats || []), ...(data?.formatStreams || [])];
-      const audio = formats
-        .filter(x => x?.url && String(x?.type || x?.mimeType || "").toLowerCase().includes("audio"))
-        .sort((a,b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))[0];
-      if (!audio?.url) throw new Error("no direct audio format");
-      const mediaController = new AbortController();
-      const mediaTimer = setTimeout(() => mediaController.abort(), 7000);
-      try {
-        const media = await fetch(audio.url, {
-          headers: { accept: "*/*", "user-agent": RECONNECT_UA },
-          signal: mediaController.signal,
-          redirect: "follow"
-        });
-        if (!media.ok || !media.body) throw new Error("media HTTP " + media.status);
-        return { base, url: audio.url, body: media.body };
-      } finally {
-        clearTimeout(mediaTimer);
+      const type = String(proxy.headers.get("content-type") || "").toLowerCase();
+      if (proxy.ok && proxy.body && !type.includes("text/html") && !type.includes("application/json")) {
+        return { base, url: proxyUrl, body: proxy.body };
       }
+      if (proxy.body) { try { await proxy.body.cancel(); } catch {} }
+      throw new Error("proxy HTTP " + proxy.status + " type " + type);
     } finally {
       clearTimeout(timer);
     }
