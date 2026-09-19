@@ -348,10 +348,69 @@ class DirectMusicManager {
       .sort((a, b) => b._searchScore - a._searchScore);
 
       if (!tracks.length) {
+        // Audius is an open catalog and does not contain every commercial song.
+        // Fall back to yt-dlp search for a single video only. Playlists and
+        // compilation uploads are explicitly rejected.
+        try {
+          const result = await this.runYtDlp([
+            `ytsearch5:${clean}`,
+            "--flat-playlist",
+            "--dump-single-json",
+            "--no-playlist"
+          ], 20000);
+          const data = JSON.parse(result.stdout || "{}");
+          const entries = Array.isArray(data?.entries) ? data.entries : [];
+          const normalizeYt = value => String(value || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, " ")
+            .replace(/\\s+/g, " ")
+            .trim();
+          const queryNorm = normalizeYt(clean);
+          const queryWords = queryNorm.split(" ").filter(Boolean);
+          const isBadVideo = title => /\\b(playlist|mix|compilation|meg[a\\s-]?mix|full album|album mix|nonstop|continuous|top .* songs|best .* songs|latest .* songs|new .* songs|all .* songs|collection|yt5s|1\\s*hour|2\\s*hour|3\\s*hour)\\b/i.test(String(title || ""));
+          const ytCandidates = entries
+            .filter(entry => entry?.id && entry?.title && !isBadVideo(entry.title))
+            .map(entry => {
+              const title = normalizeYt(entry.title);
+              const channel = normalizeYt(entry.channel || entry.uploader);
+              const titleWords = new Set(title.split(" ").filter(Boolean));
+              const channelWords = new Set(channel.split(" ").filter(Boolean));
+              const matchedTitle = queryWords.filter(w => titleWords.has(w)).length;
+              const matchedChannel = queryWords.filter(w => channelWords.has(w)).length;
+              let score = matchedTitle * 20 + matchedChannel * 8;
+              if (title.includes(queryNorm)) score += 100;
+              if (queryWords.length && queryWords.every(w => titleWords.has(w))) score += 80;
+              return { entry, score };
+            })
+            .sort((a, b) => b.score - a.score);
+
+          const best = ytCandidates[0];
+          if (best && best.score >= Math.max(20, queryWords.length * 10)) {
+            const info = await this.runYtDlp([
+              `https://www.youtube.com/watch?v=${best.entry.id}`,
+              "--no-playlist",
+              "--dump-single-json",
+              "--skip-download",
+              "--format", "bestaudio/best"
+            ], 25000);
+            const video = JSON.parse(info.stdout || "{}");
+            const audioUrl = video?.url;
+            if (audioUrl) {
+              const track = this.normalizeTrack(video, requester);
+              track.url = audioUrl;
+              track.source = "youtube";
+              track.isAutoplay = false;
+              return { type: "track", tracks: [track] };
+            }
+          }
+        } catch (error) {
+          console.warn("⚠️ Audius miss; yt-dlp fallback failed:", error?.message || error);
+        }
+
         throw new Error(
           remixRequested
-            ? "No close match found for \"" + clean + "\" on the music catalog."
-            : "No original/standard version found for \"" + clean + "\" on the music catalog."
+            ? "No close match found for \"" + clean + "\"."
+            : "No original/standard version found for \"" + clean + "\"."
         );
       }
 
