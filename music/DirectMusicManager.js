@@ -431,19 +431,18 @@ class DirectMusicManager {
     state.manualGeneration++;
     track.isAutoplay = false;
 
-    const playing = Boolean(state.current && player.state.status !== AudioPlayerStatus.Idle);
-    if (playing && state.current?.isAutoplay) {
-      // Manual /play takes priority, but hand off atomically. Do not stop or
-      // destroy the current autoplay stream before the replacement has PCM.
+    const playerBusy = player.state.status === AudioPlayerStatus.Playing || player.state.status === AudioPlayerStatus.Paused || Boolean(state.transitioning);
+    if (state.current?.isAutoplay && playerBusy) {
+      // Manual /play always wins over autoplay, but uses the same atomic handoff.
       await this.startTrack(guildId, track, 0, { handoff: true });
       return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: true, queued: false };
     }
 
-    if (!state.current && player.state.status === AudioPlayerStatus.Idle) {
-      await this.startTrack(guildId, track);
+    // If Discord is idle, never let stale state.current block a new play.
+    if (!playerBusy && player.state.status === AudioPlayerStatus.Idle) {
+      await this.startTrack(guildId, track, 0, { handoff: true });
       return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: true, queued: false };
     }
-
     state.queue.push(track);
     await this.refreshPanel(guildId).catch(() => {});
     return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: false, queued: true };
