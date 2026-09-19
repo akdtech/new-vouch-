@@ -198,6 +198,19 @@ client.on(Events.InteractionCreate, async interaction => {
       } catch (replyError) {
         if (replyError?.code !== 10008) console.warn("⚠️ Command error response failed:", replyError?.message || replyError);
       }
+    } finally {
+      // Slash commands do not fire MessageCreate, so explicitly move the
+      // control panel back to the absolute bottom after every command.
+      if (interaction.guildId === config.guildId && music.musicTextChannelId) {
+        const state = music.getState(interaction.guildId);
+        if (state.panelMessageId) {
+          await music.movePanelToBottom(interaction.guildId).catch(error =>
+            console.warn("⚠️ Command sticky panel move failed:", error?.message || error)
+          );
+        } else {
+          await music.ensurePanel(interaction.guildId).catch(() => {});
+        }
+      }
     }
     return;
   }
@@ -272,6 +285,13 @@ client.on(Events.InteractionCreate, async interaction => {
 
       await music.refreshPanel(guildId).catch(() => {});
       if (isQueue) return;
+      // Button interactions also do not create MessageCreate events.
+      // Recreate the panel after every control action so it remains last.
+      if (guildId === config.guildId && music.musicTextChannelId) {
+        await music.movePanelToBottom(guildId).catch(error =>
+          console.warn("⚠️ Button sticky panel move failed:", error?.message || error)
+        );
+      }
     } catch (error) {
       console.error("❌ Music button error:", error);
       await music.refreshPanel(guildId).catch(() => {});
