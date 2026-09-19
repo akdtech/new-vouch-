@@ -239,7 +239,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   ffArgs.push("-i", sourceUrl,
   ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
   "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
-  ];
+  );
   const ff = spawn(FFMPEG, ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
   const first = await waitForPcm(ff, PCM_TIMEOUT);
