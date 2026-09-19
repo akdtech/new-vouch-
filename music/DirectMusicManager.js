@@ -494,14 +494,25 @@ class DirectMusicManager {
 
   ensurePlayer(guildId) {
     let player = this.players.get(guildId);
-    if (player) return player;
 
-    player = createAudioPlayer({
-      behaviors: { noSubscriber: NoSubscriberBehavior.Play }
-    });
-    this.players.set(guildId, player);
+    if (!player) {
+      player = createAudioPlayer({
+        behaviors: { noSubscriber: NoSubscriberBehavior.Play }
+      });
+      this.players.set(guildId, player);
+    }
+
+    // Always subscribe the existing player to the CURRENT voice connection.
+    // After a Discord reconnect, the connection object changes; keeping the
+    // old subscription makes the bot report "Playing" while Discord receives
+    // no audio.
     const connection = this.connections.get(guildId);
-    if (connection) connection.subscribe(player);
+    if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+      try { connection.subscribe(player); } catch (error) {
+        console.warn("⚠️ Audio player subscription failed:", error?.message || error);
+      }
+    }
+
     return player;
   }
 
