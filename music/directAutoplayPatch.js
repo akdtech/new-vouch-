@@ -17,7 +17,7 @@ const PIPED_SEARCH_INSTANCES = String(process.env.PIPED_API_URLS || [
   "https://pipedapi.owo.si"
 ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
 
-const BAD_TITLE = /\b(\d+\s*(?:hour|hr)s?|hour\s*mix|\bmix\b|playlist|compilation|continuous|nonstop|radio|medley|full\s*album|album|collection|lofi\s*mix|sleep\s*music|long\s*version)\b/i;
+const BAD_TITLE = /\b(\d+\s*(?:hour|hr)s?|hour\s*mix|\bmix\b|playlist|compilation|continuous|non\s*stop|radio|medley|full\s*album|album|collection|lofi\s*mix|sleep\s*music|long\s*version|dj\s*remix)\b/i;
 const STOP_WORDS = new Set(["the","a","an","and","or","of","to","for","in","on","at","with","from","is","it","my","your","me","you","official","video","audio","music","song","songs","lyrics","lyric","remix","edit","version","full","hd","4k","feat","ft"]);
 
 function clean(value){return String(value || "").replace(/\s+/g," ").trim();}
