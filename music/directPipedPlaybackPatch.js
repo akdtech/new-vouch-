@@ -8,12 +8,15 @@ const { createAudioResource, StreamType } = require("@discordjs/voice");
 
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
 const PIPED = String(process.env.PIPED_API_URLS || [
-  "https://pipedapi.kavin.rocks",
   "https://pipedapi.ducks.party",
   "https://api.piped.private.coffee",
-  "https://pipedapi.leptons.xyz",
-  "https://pipedapi.adminforge.de",
-  "https://pipedapi.darkness.services"
+  "https://api.piped.projectsegfau.lt",
+  "https://pipedapi.in.projectsegfau.lt",
+  "https://pipedapi.eu.projectsegfau.lt",
+  "https://pipedapi.qwik.space",
+  "https://yapi.vyper.me",
+  "https://api.piped.minionflo.net",
+  "https://nuv3d-7iaaa-aaaan-qahma-cai.ic0.app"
 ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
 
 const clean = v => String(v || "").replace(/\s+/g, " ").trim();
