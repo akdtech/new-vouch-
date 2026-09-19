@@ -45,8 +45,16 @@ const idOf = t => t?.identifier || t?.id || t?.url || null;
 const kill = p => { try { p?.kill("SIGKILL"); } catch {} };
 
 function youtubeArgs(profile = "default,web_embedded") {
+  // YouTube's current anonymous bot checks are much more aggressive on
+  // mweb.  web_embedded + default is the documented logged-out fallback;
+  // it does not require a GVS PO token for the embedded route.
+  const p = String(profile || "default,web_embedded");
+  const needsPot = /(^|,)mweb(,|$)|(^|,)web(,|$)/.test(p);
+  const extractor = needsPot
+    ? `youtube:player_client=${p};fetch_pot=always;use_ad_playback_context=false`
+    : `youtube:player_client=${p};use_ad_playback_context=false`;
   return [
-    "--extractor-args", `youtube:player_client=${profile};fetch_pot=always;use_ad_playback_context=false`,
+    "--extractor-args", extractor,
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno"
@@ -191,10 +199,12 @@ async function getInvidiousStream(id) {
 
 async function resolveYouTubeUrl(track) {
   const profiles = [
-    "mweb",
+    "web_embedded,default",
+    "default,web_embedded",
+    "tv",
+    "android_vr",
     "web_safari",
-    "web_embedded",
-    "android_vr"
+    "mweb"
   ];
   let lastError = null;
 
@@ -248,7 +258,7 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
     "--force-ipv4",
     "--retries", "1",
     "--fragment-retries", "1",
-    "--extractor-args", "youtube:player_client=mweb;fetch_pot=always;use_ad_playback_context=false",
+    "--extractor-args", "youtube:player_client=web_embedded,default;use_ad_playback_context=false",
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno",
