@@ -242,7 +242,7 @@ class DirectMusicManager {
       };
     }
 
-    const base = "https://discoveryprovider.audius.co/v1";
+    const base = "https://api.audius.co/v1";
     const endpoint = new URL(base + "/tracks/search");
     endpoint.searchParams.set("query", clean);
     endpoint.searchParams.set("limit", "8");
