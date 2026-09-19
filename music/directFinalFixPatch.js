@@ -37,7 +37,14 @@ const INVIDIOUS = String(process.env.INVIDIOUS_API_URLS || [
   "https://invidious.tiekoetter.com",
   "https://yewtu.be",
   "https://yt.artemislena.eu",
-  "https://invidious.flokinet.to"
+  "https://invidious.flokinet.to",
+  "https://invidious.f5.si",
+  "https://inv.tux.pizza",
+  "https://invidious.privacydev.net",
+  "https://iv.melmac.space",
+  "https://invidious.private.coffee",
+  "https://invidious.protokolla.fi",
+  "https://iv.ggtyler.dev"
 ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
 
 const clean = v => String(v || "").replace(/\s+/g, " ").trim();
@@ -167,21 +174,33 @@ async function waitForPcm(ff, timeoutMs) {
 async function getInvidiousStream(id) {
   const jobs = INVIDIOUS.map(async base => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => controller.abort(), 7000);
     try {
-      const response = await fetch(`${base}/api/v1/videos/${encodeURIComponent(id)}?local=true`, {
-        headers: { accept: "application/json", "user-agent": "DEATH-Music-24-7/4.0" },
+      const response = await fetch(base + "/api/v1/videos/" + encodeURIComponent(id) + "?local=true", {
+        headers: { accept: "application/json", "user-agent": RECONNECT_UA },
         signal: controller.signal,
         redirect: "follow"
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new Error("API HTTP " + response.status);
       const data = await response.json();
       const formats = [...(data?.adaptiveFormats || []), ...(data?.formatStreams || [])];
       const audio = formats
         .filter(x => x?.url && String(x?.type || x?.mimeType || "").toLowerCase().includes("audio"))
         .sort((a,b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))[0];
       if (!audio?.url) throw new Error("no direct audio format");
-      return { base, url: audio.url };
+      const mediaController = new AbortController();
+      const mediaTimer = setTimeout(() => mediaController.abort(), 7000);
+      try {
+        const media = await fetch(audio.url, {
+          headers: { accept: "*/*", "user-agent": RECONNECT_UA },
+          signal: mediaController.signal,
+          redirect: "follow"
+        });
+        if (!media.ok || !media.body) throw new Error("media HTTP " + media.status);
+        return { base, url: audio.url, body: media.body };
+      } finally {
+        clearTimeout(mediaTimer);
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -481,6 +500,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
 
   let sourceUrl = null;
   let sourceHeaders = "";
+  let sourceBody = null;
   let sourceName = "youtube";
 
   // Piped is attempted first because it can hand us a server-side audio URL
@@ -500,6 +520,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
     try {
       const inv = await getInvidiousStream(idOf(track));
       sourceUrl = inv.url;
+      sourceBody = inv.body || null;
       sourceName = `invidious:${inv.base}`;
       console.log(`🛟 Final core selected Invidious source for ${manager.getTrackTitle(track)}`);
     } catch (error) {
@@ -542,7 +563,8 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
     try {
       const media = await fetch(sourceUrl, { headers: { "user-agent": RECONNECT_UA, accept: "*/*" }, redirect: "follow" });
       if (!media.ok || !media.body) throw new Error(`Invidious media HTTP ${media.status}`);
-      Readable.fromWeb(media.body).pipe(ff.stdin);
+      if (!sourceBody) throw new Error("Invidious media body unavailable");
+      Readable.fromWeb(sourceBody).pipe(ff.stdin);
     } catch (error) {
       kill(ff);
       console.warn(`⚠️ Invidious stream fetch failed; trying SoundCloud: ${clean(error?.message || error).slice(-600)}`);
