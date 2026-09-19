@@ -837,7 +837,7 @@ class DirectMusicManager {
       .setFooter({ text: "DEATH × GMAO • 24/7 Direct Voice Music" })
       .setTimestamp();
 
-    const row1 = new ActionRowBuilder().addComponents
+    const row1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("death_music_pause").setLabel("Pause").setEmoji("⏸️").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("death_music_resume").setLabel("Resume").setEmoji("▶️").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("death_music_skip").setLabel("Skip").setEmoji("⏭️").setStyle(ButtonStyle.Primary),
