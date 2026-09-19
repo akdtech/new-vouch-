@@ -12,7 +12,7 @@ const { createAudioResource, StreamType } = require("@discordjs/voice");
 
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
-const STARTUP_MS = 9000;
+const STARTUP_MS = 20000;
 const PROVIDER_MS = 5000;
 const PCM_BUFFER = 1024 * 1024;
 
