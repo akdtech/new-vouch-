@@ -195,6 +195,35 @@ async function getInvidiousStream(id) {
   return Promise.any(jobs);
 }
 
+async function getCobaltStream(track) {
+  const endpoints = String(process.env.COBALT_API_URLS || "https://cobalt-api.meowing.de,https://cobalt-backend.canine.tools,https://capi.3kh0.net")
+    .split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
+  const jobs = endpoints.map(async base => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const r = await fetch(base + "/", {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json", "user-agent": "DEATH-Music-24-7/1.0" },
+        body: JSON.stringify({ url: track.url, downloadMode: "audio", audioFormat: "best", audioBitrate: "128", alwaysProxy: true, disableMetadata: true }),
+        signal: controller.signal
+      });
+      if (!r.ok) throw new Error("Cobalt HTTP " + r.status);
+      const data = await r.json();
+      const target = data?.url;
+      if (!target || !["tunnel","redirect","stream","success"].includes(String(data?.status || ""))) throw new Error("Cobalt returned no stream");
+      const mediaController = new AbortController();
+      const mediaTimer = setTimeout(() => mediaController.abort(), 10000);
+      try {
+        const media = await fetch(target, { headers: { accept: "*/*", "user-agent": RECONNECT_UA }, signal: mediaController.signal, redirect: "follow" });
+        if (!media.ok || !media.body) throw new Error("Cobalt media HTTP " + media.status);
+        return { base, url: target, body: media.body };
+      } finally { clearTimeout(mediaTimer); }
+    } finally { clearTimeout(timer); }
+  });
+  return Promise.any(jobs);
+}
+
 async function resolveYouTubeUrl(track) {
   const profiles = [
     "mweb",
@@ -505,6 +534,18 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
 
   if (!sourceUrl) {
     try {
+      const cobalt = await getCobaltStream(track);
+      sourceUrl = cobalt.url;
+      sourceBody = cobalt.body || null;
+      sourceName = `cobalt:${cobalt.base}`;
+      console.log(`🟣 Cobalt source selected for ${manager.getTrackTitle(track)} via ${cobalt.base}`);
+    } catch (error) {
+      console.warn(`⚠️ Cobalt source unavailable for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-400)}`);
+    }
+  }
+
+  if (!sourceUrl) {
+    try {
       const inv = await getInvidiousStream(idOf(track));
       sourceUrl = inv.url;
       sourceBody = inv.body || null;
@@ -546,7 +587,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   );
   const ff = spawn(FFMPEG, ffArgs, { stdio: ["pipe", "pipe", "pipe"] });
 
-  if (sourceName.startsWith("invidious:")) {
+  if (sourceName.startsWith("invidious:") || sourceName.startsWith("cobalt:")) {
     try {
       const media = await fetch(sourceUrl, { headers: { "user-agent": RECONNECT_UA, accept: "*/*" }, redirect: "follow" });
       if (!media.ok || !media.body) throw new Error(`Invidious media HTTP ${media.status}`);
