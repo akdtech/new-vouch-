@@ -68,7 +68,7 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
         state.startedAt = 0;
         state.positionOffset = 0;
         Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
-        Promise.resolve(this.startTrack(guildId, next)).catch(error => {
+        Promise.resolve(this.startTrack(guildId, next, 0, { handoff: true })).catch(error => {
           state.transitioning = false;
           console.warn(`⚠️ Skip recovery failed: ${error?.message || error}`);
           if (state.autoplay && !state.intentionalLeave) Promise.resolve(this.autoplayNext(guildId)).catch(() => {});
@@ -88,14 +88,9 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
     }
 
     state.transitioning = true;
-    this.destroyStream(guildId);
-    state.current = null;
-    state.startedAt = 0;
-    state.positionOffset = 0;
-    state.paused = false;
-    state.audioResource = null;
-    try { player?.stop(true); } catch {}
 
+    // Prepare the replacement while the current resource remains alive.
+    // startTrack() performs an atomic Discord audio-resource handoff once real PCM exists.
     const next = state.queue.shift();
     if (next) {
       state.current = next;
