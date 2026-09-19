@@ -139,27 +139,39 @@ client.once(Events.ClientReady, async readyClient => {
 // message does not move it, so the panel must be recreated to stay last.
 let stickyPanelTimer = null;
 let stickyPanelBusy = false;
+let stickyPanelPending = false;
 
 client.on(Events.MessageCreate, message => {
   if (!message.guildId || message.author?.bot) return;
   if (message.guildId !== config.guildId) return;
   if (!music.musicTextChannelId || message.channelId !== music.musicTextChannelId) return;
 
+  stickyPanelPending = true;
   clearTimeout(stickyPanelTimer);
   stickyPanelTimer = setTimeout(async () => {
     if (stickyPanelBusy) return;
     stickyPanelBusy = true;
     try {
-      const state = music.getState(message.guildId);
-      if (!state.panelMessageId) {
-        await music.ensurePanel(message.guildId).catch(() => {});
-        return;
+      while (stickyPanelPending) {
+        stickyPanelPending = false;
+        const state = music.getState(message.guildId);
+        if (!state.panelMessageId) await music.ensurePanel(message.guildId).catch(() => {});
+        else await music.movePanelToBottom(message.guildId);
+        await new Promise(resolve => setTimeout(resolve, 150));
       }
-      await music.movePanelToBottom(message.guildId);
     } catch (error) {
       console.warn("⚠️ Sticky music panel move failed:", error?.message || error);
     } finally {
       stickyPanelBusy = false;
+      if (stickyPanelPending) {
+        clearTimeout(stickyPanelTimer);
+        stickyPanelTimer = setTimeout(() => {
+          stickyPanelBusy = false;
+          stickyPanelPending = true;
+          const state = music.getState(message.guildId);
+          music.movePanelToBottom(message.guildId).catch(error => console.warn("⚠️ Sticky music panel retry failed:", error?.message || error));
+        }, 50);
+      }
     }
   }, 250);
 });
