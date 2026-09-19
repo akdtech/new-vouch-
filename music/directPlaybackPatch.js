@@ -31,6 +31,8 @@ const clean = v => String(v || "").replace(/\s+/g, " ").trim();
 const errText = (v, max = 1400) => clean(v).slice(-max);
 const ytId = value => String(value || "").match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i)?.[1] || null;
 function kill(child) { try { child?.kill("SIGKILL"); } catch {} }
+function ignorePipeErrors(stream) { if (!stream || stream.__deathPipeGuard) return; stream.__deathPipeGuard = true; stream.on("error", error => { if (error?.code !== "EPIPE") console.warn(`⚠️ Audio pipe error: ${error?.message || error}`); }); }
+function retireStream(stream) { if (!stream) return; try { stream.yt?.stdout?.unpipe?.(); } catch {} try { stream.ff?.stdin?.end?.(); } catch {} try { kill(stream.yt); } catch {} try { kill(stream.ff); } catch {} try { stream.pcm?.end?.(); } catch {} }
 function timeout(promise, ms, label) {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out.`)), ms); })]).finally(() => clearTimeout(timer));
@@ -59,7 +61,7 @@ async function invidiousMeta(base, id) {
   };
 }
 
-async function startInvidious(manager, guildId, originalTrack, startMs, token) {
+async function startInvidious(manager, guildId, originalTrack, startMs, token, handoff = false) {
   const id = ytId(originalTrack?.url) || originalTrack?.id || originalTrack?.identifier;
   if (!id) throw new Error("no YouTube id");
   const state = manager.getState(guildId);
@@ -92,18 +94,19 @@ async function startInvidious(manager, guildId, originalTrack, startMs, token) {
   setTimeout(() => candidates.forEach(p => p.then(x => { if (x.ff !== winner.ff) kill(x.ff); }).catch(() => {})), 0);
 
   if (state.playbackToken !== token) { kill(winner.ff); throw new Error("playback attempt superseded"); }
-  manager.destroyStream(guildId);
+  const oldStream = manager.streams.get(guildId);
   const pcm = new PassThrough({ highWaterMark: PCM_BUFFER });
   const r = resource(state, winner.track, pcm);
   state.current = winner.track; state.transitioning = false; state.paused = false; state.startedAt = Date.now(); state.positionOffset = Math.max(0, Number(startMs || 0));
   manager.streams.set(guildId, { yt: null, ff: winner.ff, pcm, resource: r, source: "invidious" });
   pcm.write(winner.first); winner.ff.stdout.pipe(pcm); player.play(r);
+  if (handoff) retireStream(oldStream);
   Promise.resolve(manager.refreshPanel?.(guildId)).catch(() => {});
   console.log(`🚀 Invidious playback started: ${winner.track.title} via ${winner.base}`);
   return true;
 }
 
-async function startYouTube(manager, guildId, track, startMs, token) {
+async function startYouTube(manager, guildId, track, startMs, token, handoff = false) {
   const state = manager.getState(guildId);
   const player = manager.players.get(guildId) || manager.ensurePlayer(guildId);
   manager.bindPlayerEvents(guildId, player);
@@ -116,7 +119,10 @@ async function startYouTube(manager, guildId, track, startMs, token) {
   ];
   const yt = spawn(YTDLP, args, { stdio: ["ignore", "pipe", "pipe"] });
   const ff = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", "-nostdin", "-i", "pipe:0", ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []), "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"], { stdio: ["pipe", "pipe", "pipe"] });
+  const oldStream = manager.streams.get(guildId);
   const pcm = new PassThrough({ highWaterMark: PCM_BUFFER });
+  ignorePipeErrors(ff.stdin);
+  ignorePipeErrors(yt.stdout);
   let ytErr = "", ffErr = "";
   const cleanup = () => { kill(yt); kill(ff); try { pcm.destroy(); } catch {} };
   try {
@@ -132,11 +138,11 @@ async function startYouTube(manager, guildId, track, startMs, token) {
       yt.stdout.pipe(ff.stdin);
     });
     if (state.playbackToken !== token) { cleanup(); throw new Error("playback attempt superseded"); }
-    manager.destroyStream(guildId);
     const r = resource(state, track, pcm);
     state.current = track; state.transitioning = false; state.paused = false; state.startedAt = Date.now(); state.positionOffset = Math.max(0, Number(startMs || 0));
     manager.streams.set(guildId, { yt, ff, pcm, resource: r, source: "youtube" });
     pcm.write(first); ff.stdout.pipe(pcm); player.play(r);
+    if (handoff) retireStream(oldStream);
     Promise.resolve(manager.refreshPanel?.(guildId)).catch(() => {});
     console.log(`▶️ YouTube playback started: ${track.title}`);
     return true;
@@ -162,13 +168,16 @@ async function soundCloudResolve(track) {
   return { url: item.webpage_url || item.original_url || item.url, title: clean(item.title) || track.title, author: clean(item.uploader || item.channel) || track.author, duration: Number(item.duration || 0) * 1000, thumbnail: item.thumbnail || track.thumbnail || null };
 }
 
-async function startSoundCloud(manager, guildId, originalTrack, startMs, token) {
+async function startSoundCloud(manager, guildId, originalTrack, startMs, token, handoff = false) {
   const found = await soundCloudResolve(originalTrack);
   const state = manager.getState(guildId), player = manager.players.get(guildId) || manager.ensurePlayer(guildId);
+  const oldStream = manager.streams.get(guildId);
   const track = { ...originalTrack, ...found, url: found.url, length: found.duration || originalTrack.length || 0, source: "soundcloud" };
   const yt = spawn(YTDLP, ["--no-warnings", "--no-progress", "--no-playlist", "--force-ipv4", "--format", "bestaudio/best", "--output", "-", found.url], { stdio: ["ignore", "pipe", "pipe"] });
   const ff = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", "-nostdin", "-i", "pipe:0", ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []), "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"], { stdio: ["pipe", "pipe", "pipe"] });
   let err = "";
+  ignorePipeErrors(ff.stdin);
+  ignorePipeErrors(yt.stdout);
   try {
     const first = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("SoundCloud produced no audio within 5s.")), 5000);
@@ -181,6 +190,7 @@ async function startSoundCloud(manager, guildId, originalTrack, startMs, token) 
     state.current = track; state.transitioning = false; state.paused = false; state.startedAt = Date.now(); state.positionOffset = Math.max(0, Number(startMs || 0));
     manager.streams.set(guildId, { yt, ff, pcm, resource: r, source: "soundcloud" });
     pcm.write(first); ff.stdout.pipe(pcm); player.play(r);
+    if (handoff) retireStream(oldStream);
     Promise.resolve(manager.refreshPanel?.(guildId)).catch(() => {});
     console.log(`☁️ SoundCloud playback started: ${track.title}`);
     return true;
@@ -190,21 +200,23 @@ async function startSoundCloud(manager, guildId, originalTrack, startMs, token) 
 function install(Manager) {
   if (!Manager || Manager.prototype.__deathStablePlaybackV6) return;
   Manager.prototype.__deathStablePlaybackV6 = true;
-  Manager.prototype.startTrack = async function stableStartTrack(guildId, track, startMs = 0) {
+  Manager.prototype.startTrack = async function stableStartTrack(guildId, track, startMs = 0, options = {}) {
     const state = this.getState(guildId), previous = state.current;
+    const handoff = options?.handoff !== false;
     const token = Number(state.playbackToken || 0) + 1;
     state.playbackToken = token; state.current = track; state.transitioning = true;
     const failures = [];
 
-    try { await startInvidious(this, guildId, track, startMs, token); return true; }
+    try { await startInvidious(this, guildId, track, startMs, token, handoff); return true; }
     catch (e) { failures.push(`Invidious: ${errText(e?.message || e, 500)}`); }
-    try { await startYouTube(this, guildId, track, startMs, token); return true; }
+    try { await startYouTube(this, guildId, track, startMs, token, handoff); return true; }
     catch (e) { failures.push(`YouTube: ${errText(e?.message || e, 900)}`); }
-    try { await startSoundCloud(this, guildId, track, startMs, token); return true; }
+    try { await startSoundCloud(this, guildId, track, startMs, token, handoff); return true; }
     catch (e) { failures.push(`SoundCloud: ${errText(e?.message || e, 600)}`); }
 
     if (state.playbackToken === token) {
-      state.current = previous || null; state.transitioning = false; state.audioResource = null;
+      state.current = previous || null; state.transitioning = false;
+      if (!handoff) state.audioResource = null;
       Promise.resolve(this.refreshPanel?.(guildId)).catch(() => {});
     }
     throw new Error(`No playable music source was available. ${failures.join(" | ")}`);
