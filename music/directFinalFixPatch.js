@@ -49,7 +49,7 @@ function youtubeArgs(profile = "default,web_embedded") {
   // mweb.  web_embedded + default is the documented logged-out fallback;
   // it does not require a GVS PO token for the embedded route.
   const p = String(profile || "default,web_embedded");
-  const needsPot = /(^|,)mweb(,|$)|(^|,)web(,|$)/.test(p);
+  const needsPot = /(^|,)(?:mweb|web(?:_[a-z]+)?)(?:,|$)/.test(p);
   const extractor = needsPot
     ? `youtube:player_client=${p};fetch_pot=always;use_ad_playback_context=false`
     : `youtube:player_client=${p};use_ad_playback_context=false`;
@@ -258,7 +258,7 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
     "--force-ipv4",
     "--retries", "1",
     "--fragment-retries", "1",
-    "--extractor-args", "youtube:player_client=web_embedded,default;use_ad_playback_context=false",
+    "--extractor-args", "youtube:player_client=web_embedded,default;fetch_pot=always;use_ad_playback_context=false",
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno",
