@@ -191,6 +191,10 @@ async function getInvidiousStream(id) {
 
 async function resolveYouTubeUrl(track) {
   const profiles = [
+    "web_safari",
+    "tv_simply",
+    "tv",
+    "android_vr",
     "web_embedded",
     "default,web_embedded",
     "mweb"
