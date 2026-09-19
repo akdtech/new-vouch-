@@ -359,6 +359,121 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
   return true;
 }
 
+async function soundCloudSearch(query, requester) {
+  const q = clean(query);
+  if (!q) return [];
+  const result = await runYtDlp([
+    "--dump-single-json",
+    "--flat-playlist",
+    "--playlist-end", "8",
+    `scsearch8:${q}`
+  ], 9000, "default");
+
+  let data;
+  try { data = JSON.parse(result.stdout); }
+  catch {
+    const lines = result.stdout.trim().split(/\\r?\\n/).filter(Boolean);
+    data = lines.length ? JSON.parse(lines.at(-1)) : null;
+  }
+
+  const entries = Array.isArray(data?.entries) ? data.entries : [];
+  return entries
+    .map(item => {
+      const url = item?.webpage_url || item?.original_url || item?.url;
+      if (!url || !/soundcloud\\.com/i.test(url)) return null;
+      return {
+        identifier: item?.id || url,
+        id: item?.id || url,
+        url,
+        title: clean(item?.title) || "Unknown track",
+        author: clean(item?.uploader || item?.artist || item?.channel) || "Unknown artist",
+        length: Number(item?.duration || 0) * 1000,
+        requester: requester || null,
+        thumbnail: item?.thumbnail || null,
+        isAutoplay: false,
+        source: "soundcloud"
+      };
+    })
+    .filter(Boolean);
+}
+
+async function startSoundCloud(manager, guildId, track, startMs, token, handoff) {
+  const state = manager.getState(guildId);
+  const player = manager.players.get(guildId) || manager.ensurePlayer(guildId);
+  manager.bindPlayerEvents(guildId, player);
+
+  const candidates = await soundCloudSearch(
+    `${clean(track?.author)} ${clean(track?.title)}`,
+    track?.requester || manager.client.user
+  );
+  if (!candidates.length) throw new Error("SoundCloud returned no playable matches.");
+
+  let lastError = null;
+  for (const candidate of candidates.slice(0, 5)) {
+    let yt = null;
+    let ff = null;
+    try {
+      yt = spawn(YTDLP, [
+        "--no-warnings", "--no-progress", "--no-playlist",
+        "--format", "bestaudio/best", "--output", "-",
+        candidate.url
+      ], { stdio: ["ignore", "pipe", "pipe"] });
+
+      ff = spawn(FFMPEG, [
+        "-hide_banner", "-loglevel", "error", "-nostdin",
+        "-i", "pipe:0",
+        ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
+        "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
+      ], { stdio: ["pipe", "pipe", "pipe"] });
+
+      const first = await waitForPcm(ff, 9000);
+      if (state.playbackToken !== token) throw new Error("playback attempt superseded");
+
+      const oldStream = manager.streams.get(guildId);
+      const pcm = new PassThrough({ highWaterMark: 1024 * 1024 });
+      const resolvedTrack = {
+        ...track,
+        ...candidate,
+        requester: track?.requester || candidate.requester,
+        isAutoplay: Boolean(track?.isAutoplay),
+        autoplayGroup: track?.autoplayGroup,
+        source: "soundcloud"
+      };
+      const resource = createAudioResource(pcm, {
+        inputType: StreamType.Raw,
+        inlineVolume: true,
+        metadata: resolvedTrack
+      });
+      resource.volume?.setVolume(Math.max(0.01, Number(state.volume || 70) / 100));
+
+      state.audioResource = resource;
+      state.current = resolvedTrack;
+      state.pendingTrack = null;
+      state.transitioning = false;
+      state.paused = false;
+      state.startedAt = Date.now();
+      state.positionOffset = Math.max(0, Number(startMs || 0));
+
+      manager.streams.set(guildId, { yt, ff, pcm, resource, source: "soundcloud" });
+      pcm.write(first);
+      ff.stdout.pipe(pcm);
+      player.play(resource);
+      if (handoff) retire(oldStream);
+
+      safeStatus(manager, guildId, resolvedTrack, track?.isAutoplay ? "Autoplay" : "Playing");
+      safePanel(manager, guildId);
+      console.log(`☁️ SoundCloud playback started: ${manager.getTrackTitle(resolvedTrack)}`);
+      return true;
+    } catch (error) {
+      lastError = error;
+      kill(yt); kill(ff);
+      console.warn(`⚠️ SoundCloud candidate failed: ${clean(candidate.title)} — ${clean(error?.message || error).slice(-500)}`);
+    }
+  }
+
+  throw lastError || new Error("SoundCloud playback failed.");
+}
+
 async function directStart(manager, guildId, track, startMs, token, handoff) {
   const state = manager.getState(guildId);
   const player = manager.players.get(guildId) || manager.ensurePlayer(guildId);
@@ -400,9 +515,14 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
       console.warn(`⚠️ yt-dlp pipe failed; trying direct media URL: ${clean(error?.message || error).slice(-700)}`);
     }
 
-    const resolved = await resolveYouTubeUrl(track);
-    sourceUrl = resolved.url;
-    sourceHeaders = resolved.headers || "";
+    try {
+      const resolved = await resolveYouTubeUrl(track);
+      sourceUrl = resolved.url;
+      sourceHeaders = resolved.headers || "";
+    } catch (error) {
+      console.warn(`⚠️ All YouTube playback routes failed; trying SoundCloud: ${clean(error?.message || error).slice(-700)}`);
+      return await startSoundCloud(manager, guildId, track, startMs, token, handoff);
+    }
   }
   if (state.playbackToken !== token) throw new Error("playback attempt superseded");
 
@@ -418,7 +538,14 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   );
   const ff = spawn(FFMPEG, ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
-  const first = await waitForPcm(ff, PCM_TIMEOUT);
+  let first;
+  try {
+    first = await waitForPcm(ff, PCM_TIMEOUT);
+  } catch (error) {
+    kill(ff);
+    console.warn(`⚠️ Direct media URL produced no PCM; trying SoundCloud: ${clean(error?.message || error).slice(-600)}`);
+    return await startSoundCloud(manager, guildId, track, startMs, token, handoff);
+  }
   if (state.playbackToken !== token) {
     kill(ff);
     throw new Error("playback attempt superseded");
@@ -515,12 +642,21 @@ async function searchYt(manager, query, requester) {
     console.warn(`⚠️ Fast proxy search unavailable; trying yt-dlp briefly: ${clean(proxyError?.message || proxyError).slice(-500)}`);
   }
 
-  const result = await runYtDlp([
-    "--dump-single-json",
-    "--flat-playlist",
-    "--playlist-end", "5",
-    "ytsearch5:" + q
-  ], 9000, "mweb");
+  let result;
+  try {
+    result = await runYtDlp([
+      "--dump-single-json",
+      "--flat-playlist",
+      "--playlist-end", "5",
+      "ytsearch5:" + q
+    ], 9000, "mweb");
+  } catch (youtubeSearchError) {
+    console.warn(`⚠️ YouTube search blocked; trying SoundCloud search: ${clean(youtubeSearchError?.message || youtubeSearchError).slice(-500)}`);
+    const soundcloudTracks = await soundCloudSearch(q, requester);
+    if (!soundcloudTracks.length) throw youtubeSearchError;
+    console.log(`☁️ SoundCloud search success: ${soundcloudTracks[0].title}`);
+    return { type: "track", tracks: soundcloudTracks };
+  }
 
   let data;
   try { data = JSON.parse(result.stdout); }
