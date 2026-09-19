@@ -532,7 +532,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
     "-user_agent", RECONNECT_UA
   ];
   if (sourceHeaders) ffArgs.push("-headers", sourceHeaders);
-  ffArgs.push("-i", sourceUrl,
+  ffArgs.push("-i", sourceName.startsWith("invidious:") ? "pipe:0" : sourceUrl,
   ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
   "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
   );
