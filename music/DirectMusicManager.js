@@ -112,7 +112,9 @@ class DirectMusicManager {
         manualGeneration: 0,
         autoplayBusy: false,
         intentionalLeave: false,
-        retryTimer: null
+        retryTimer: null,
+        autoplayContext: null,
+        transitioning: false
       });
     }
     return this.states.get(guildId);
@@ -263,6 +265,7 @@ class DirectMusicManager {
         title: t.title || "Unknown track",
         author: t.user?.name || t.user?.handle || "Audius artist",
         length: Number(t.duration || 0) * 1000,
+        genre: t.genre || t.tags?.genre || null,
         requester: requester || this.client.user,
         thumbnail: t.artwork?.["480x480"] || t.artwork?.["150x150"] || null,
         source: "audius"
@@ -459,6 +462,14 @@ class DirectMusicManager {
 
     state.manualGeneration++;
     track.isAutoplay = false;
+    // Autoplay follows the last song the user searched for: prefer the same
+    // artist first, then the same genre. This prevents random 1-hour mixes.
+    state.autoplayContext = {
+      title: track.title,
+      author: track.author,
+      genre: track.genre || null,
+      id: this.getTrackId(track)
+    };
 
     const playerBusy = player.state.status === AudioPlayerStatus.Playing || player.state.status === AudioPlayerStatus.Paused || Boolean(state.transitioning);
     if (state.current?.isAutoplay && playerBusy) {
@@ -570,24 +581,54 @@ class DirectMusicManager {
 
     state.autoplayBusy = true;
     try {
-      const groupIndex = state.autoplayGroupIndex % AUTOPLAY_GROUPS.length;
-      const group = AUTOPLAY_GROUPS[groupIndex];
-      const seed = group.seeds[Math.floor(Math.random() * group.seeds.length)];
-      console.log(`🔎 Direct autoplay [${group.name}]: ${seed}`);
-      const result = await this.search(seed, this.client.user);
+      const context = state.autoplayContext;
+      let queries = [];
+
+      if (context?.author) {
+        queries.push(context.author);
+        if (context.genre) queries.push(`${context.genre} ${context.author}`);
+      }
+      if (context?.genre) queries.push(context.genre);
+      if (!queries.length) {
+        const groupIndex = state.autoplayGroupIndex % AUTOPLAY_GROUPS.length;
+        const group = AUTOPLAY_GROUPS[groupIndex];
+        queries.push(group.seeds[Math.floor(Math.random() * group.seeds.length)]);
+      }
+
       const recent = new Set(state.recent);
-      const candidates = result.tracks.filter(t => t.url && !recent.has(this.getTrackId(t)));
-      const chosen = candidates[0] || result.tracks[0];
-      if (!chosen) return false;
+      let chosen = null;
+      let chosenGroup = context?.author ? "Same Artist" : context?.genre ? "Same Genre" : "Autoplay";
+
+      // Try the user's current artist/genre context first. Only accept
+      // normal song lengths; reject long mixes/compilations.
+      for (const query of queries) {
+        console.log(`🔎 Direct autoplay [${chosenGroup}]: ${query}`);
+        const result = await this.search(query, this.client.user);
+        const candidates = result.tracks.filter(t => {
+          const length = Number(t.length || 0);
+          const id = this.getTrackId(t);
+          if (!t.url || !id || recent.has(id)) return false;
+          if (context?.id && id === context.id) return false;
+          return length > 0 && length <= 8 * 60 * 1000;
+        });
+
+        if (candidates.length) {
+          chosen = candidates[Math.floor(Math.random() * Math.min(candidates.length, 5))];
+          break;
+        }
+      }
+
+      if (!chosen) {
+        throw new Error("No short related track found.");
+      }
 
       chosen.isAutoplay = true;
-      chosen.autoplayGroup = group.name;
+      chosen.autoplayGroup = chosenGroup;
       const id = this.getTrackId(chosen);
       if (id) state.recent = [...state.recent, id].slice(-15);
-      state.autoplayGroupIndex = (groupIndex + 1) % AUTOPLAY_GROUPS.length;
 
       await this.startTrack(guildId, chosen);
-      console.log(`🎵 AUTOPLAY STARTED: ${chosen.title} [${group.name}]`);
+      console.log(`🎵 AUTOPLAY STARTED: ${chosen.title} [${chosen.autoplayGroup}]`);
       return true;
     } catch (error) {
       console.warn(`⚠️ Direct autoplay search/play failed: ${error?.message || error}`);
@@ -624,17 +665,36 @@ class DirectMusicManager {
 
   async skip(guildId) {
     const state = this.getState(guildId);
-    if (!state.current) throw new Error("Nothing is playing.");
-
-    // Keep the current track in state until handleTrackEnd() processes it.
-    // The old code cleared state.current first, so handleTrackEnd() had
-    // nothing left to advance to the queue/autoplay track.
     const player = this.players.get(guildId);
+
+    // The player resource is the source of truth when a fast FFmpeg/Idle
+    // transition has already cleared state.current.
+    if (!state.current) {
+      const resource = player?.state?.resource;
+      const metadata = resource?.metadata;
+      if (metadata) state.current = metadata;
+    }
+
     state.transitioning = true;
     try {
+      if (state.current) {
+        this.destroyStream(guildId);
+        try { player?.stop(true); } catch {}
+        await this.handleTrackEnd(guildId);
+        return;
+      }
+
+      // Skip should never leave the bot silent just because the previous
+      // track ended a few milliseconds before the button was clicked.
       this.destroyStream(guildId);
       try { player?.stop(true); } catch {}
-      await this.handleTrackEnd(guildId);
+      if (state.retryTimer) {
+        clearTimeout(state.retryTimer);
+        state.retryTimer = null;
+      }
+      if (state.autoplay && !state.intentionalLeave) {
+        await this.autoplayNext(guildId);
+      }
     } finally {
       state.transitioning = false;
     }
