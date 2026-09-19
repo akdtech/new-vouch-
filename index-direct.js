@@ -16,6 +16,21 @@ const path = require("path");
 const config = require("./config/config");
 const MusicManager = require("./music/DirectMusicManager");
 
+// Load the complete direct music recovery stack inside the app itself.
+// Railway may override the container/package start command, so these must
+// not depend on -r flags being preserved by the platform.
+require("./music/directCompatibilityPatch.js");
+require("./music/directAutoplayPatch.js");
+require("./music/directPlaybackPatch.js");
+require("./music/directPipedPlaybackPatch.js");
+require("./music/directInvidiousFallbackPatch.js");
+require("./music/directPipedSearchPatch.js");
+require("./music/directControlsPatch.js");
+require("./music/directPanelPatch.js");
+require("./music/directSyncPatch.js");
+require("./music/directLiveStatePatch.js");
+require("./music/directPlaylistPatch.js");
+
 if (!config.token || !config.clientId) {
   console.error("❌ Missing DISCORD_TOKEN or CLIENT_ID.");
   process.exit(1);
