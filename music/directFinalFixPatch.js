@@ -492,6 +492,14 @@ function install() {
     player.on(AudioPlayerStatus.Playing, () => sync("playing"));
     player.on(AudioPlayerStatus.Paused, () => sync("paused"));
     player.on(AudioPlayerStatus.Buffering, () => safePanel(this, guildId));
+
+    if (!player.__deathPanelTicker) {
+      player.__deathPanelTicker = setInterval(() => {
+        const state = this.getState(guildId);
+        if (state.intentionalLeave) return;
+        if (state.current || player.state?.resource) safePanel(this, guildId);
+      }, 5000);
+    }
   };
 
   if (!this?.dummy) {}
