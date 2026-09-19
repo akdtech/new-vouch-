@@ -166,18 +166,25 @@ async function resolveYouTubeUrl(track) {
   for (const profile of profiles) {
     try {
       const result = await runYtDlp([
-        "--get-url",
+        "--dump-single-json",
+        "--skip-download",
         "--format", "bestaudio/best",
         "--no-check-certificates",
         track.url
       ], RESOLVE_TIMEOUT, profile);
 
-      const urls = result.stdout.split(/\r?\n/).map(clean).filter(v => /^https?:\/\//i.test(v));
-      if (urls.length) {
+      const info = JSON.parse(result.stdout);
+      const url = clean(info?.url || info?.requested_formats?.find(x => x?.url)?.url);
+      if (url) {
+        const rawHeaders = info?.http_headers || {};
+        const headers = Object.entries(rawHeaders)
+          .filter(([k, v]) => k && v)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join("\\r\\n") + "\\r\\n";
         console.log(`🔑 YouTube direct URL resolved with client profile: ${profile}`);
-        return urls[urls.length - 1];
+        return { url, headers };
       }
-      lastError = new Error(`No URL from YouTube client ${profile}`);
+      lastError = new Error(`No direct URL from YouTube client ${profile}`);
     } catch (error) {
       lastError = error;
       console.warn(`⚠️ YouTube client ${profile} failed: ${clean(error?.message || error).slice(-500)}`);
@@ -200,6 +207,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   manager.bindPlayerEvents(guildId, player);
 
   let sourceUrl = null;
+  let sourceHeaders = "";
   let sourceName = "youtube";
 
   // Piped is attempted first because it can hand us a server-side audio URL
@@ -215,17 +223,24 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
     }
   }
 
-  if (!sourceUrl) sourceUrl = await resolveYouTubeUrl(track);
+  if (!sourceUrl) {
+    const resolved = await resolveYouTubeUrl(track);
+    sourceUrl = resolved.url;
+    sourceHeaders = resolved.headers || "";
+  }
   if (state.playbackToken !== token) throw new Error("playback attempt superseded");
 
-  const ff = spawn(FFMPEG, [
+  const ffArgs = [
     "-hide_banner", "-loglevel", "error", "-nostdin",
     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-    "-user_agent", RECONNECT_UA,
-    "-i", sourceUrl,
-    ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-    "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+    "-user_agent", RECONNECT_UA
+  ];
+  if (sourceHeaders) ffArgs.push("-headers", sourceHeaders);
+  ffArgs.push("-i", sourceUrl,
+  ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
+  "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
+  ];
+  const ff = spawn(FFMPEG, ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
   const first = await waitForPcm(ff, PCM_TIMEOUT);
   if (state.playbackToken !== token) {
