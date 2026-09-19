@@ -245,7 +245,7 @@ class DirectMusicManager {
     const base = "https://api.audius.co/v1";
     const endpoint = new URL(base + "/tracks/search");
     endpoint.searchParams.set("query", clean);
-    endpoint.searchParams.set("limit", "25");
+    endpoint.searchParams.set("limit", "50");
     endpoint.searchParams.set("sort_method", "relevant");
 
     const controller = new AbortController();
@@ -258,11 +258,18 @@ class DirectMusicManager {
       if (!response.ok) throw new Error("Music catalog returned HTTP " + response.status);
       const json = await response.json();
       const list = Array.isArray(json?.data) ? json.data : [];
-      const tokens = clean
+
+      const normalize = value => String(value || "")
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, " ")
-        .split(/\s+/)
-        .filter(Boolean);
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const queryText = normalize(clean);
+      const tokens = queryText.split(" ").filter(Boolean);
+      const remixRequested = /\b(remix|remixed|edit|mix|mashup|bootleg|rework|version|live|acoustic|instrumental|sped up|slowed|nightcore|8d)\b/i.test(clean);
+
+      const unwantedVariants = /\b(remix|remastered|sped[\s-]*up|slowed(?:\s*(?:and|\&)\s*reverb)?|nightcore|8d|edit|mashup|bootleg|rework|instrumental|karaoke|cover|tribute|live|acoustic|piano|lofi|lo[- ]?fi|bass boosted|slowed\s*\+\s*reverb)\b/i;
 
       const tracks = list.filter(t => t?.id).map(t => ({
         identifier: String(t.id),
@@ -275,24 +282,47 @@ class DirectMusicManager {
         requester: requester || this.client.user,
         thumbnail: t.artwork?.["480x480"] || t.artwork?.["150x150"] || null,
         source: "audius"
-      })).map(track => {
-        const title = track.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-        const author = track.author.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-        const haystack = title + " " + author;
-        const titleTokens = new Set(title.split(/\s+/).filter(Boolean));
-        const authorTokens = new Set(author.split(/\s+/).filter(Boolean));
-        const matched = tokens.filter(token => titleTokens.has(token) || authorTokens.has(token)).length;
-        const titleMatched = tokens.filter(token => titleTokens.has(token)).length;
-        const artistMatched = tokens.filter(token => authorTokens.has(token)).length;
-        const phrase = clean.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-        let score = matched * 10 + titleMatched * 12 + artistMatched * 8;
-        if (title.includes(phrase)) score += 80;
-        if (haystack.includes(phrase)) score += 40;
-        if (title === phrase) score += 120;
-        return { ...track, _searchScore: score };
-      }).sort((a, b) => b._searchScore - a._searchScore);
+      }))
+      .filter(track => remixRequested || !unwantedVariants.test(track.title))
+      .map(track => {
+        const title = normalize(track.title);
+        const author = normalize(track.author);
+        const titleTokens = new Set(title.split(" ").filter(Boolean));
+        const authorTokens = new Set(author.split(" ").filter(Boolean));
+        const matchedTitle = tokens.filter(token => titleTokens.has(token)).length;
+        const matchedAuthor = tokens.filter(token => authorTokens.has(token)).length;
+        const allQueryTokensInTitle = tokens.length > 0 && tokens.every(token => titleTokens.has(token));
+        const exactTitle = title === queryText;
+        const phraseInTitle = title.includes(queryText);
+        const variant = unwantedVariants.test(track.title);
 
-      if (!tracks.length || tracks[0]._searchScore < Math.max(10, tokens.length * 8)) {
+        // Strongly prefer an actual song-title match. Artist matches help
+        // identify queries such as "Risk It All Bruno Mars", but artist-only
+        // matches are never enough to win against a title match.
+        let score = matchedTitle * 18 + matchedAuthor * 10;
+        if (allQueryTokensInTitle) score += 70;
+        if (phraseInTitle) score += 80;
+        if (exactTitle) score += 180;
+
+        // Remix/cover/edit variants are excluded by default above. If the
+        // user explicitly asks for one, allow it but keep the normal ranking.
+        if (variant && !remixRequested) score -= 250;
+
+        return { ...track, _searchScore: score };
+      })
+      .sort((a, b) => b._searchScore - a._searchScore);
+
+      if (!tracks.length) {
+        throw new Error(
+          remixRequested
+            ? "No close match found for \"" + clean + "\" on the music catalog."
+            : "No original/standard version found for \"" + clean + "\" on the music catalog."
+        );
+      }
+
+      const best = tracks[0];
+      const minimum = Math.max(18, Math.min(70, tokens.length * 12));
+      if (best._searchScore < minimum) {
         throw new Error("No close match found for \"" + clean + "\" on the music catalog.");
       }
 
