@@ -346,6 +346,15 @@ class DirectMusicManager {
     });
 
     player.on(AudioPlayerStatus.Idle, () => {
+      // Discord can emit Idle for the resource that was just replaced.
+      // Never let that stale event tear down the NEW resource or trigger
+      // autoplay/queue recovery while a replacement is already installed.
+      const liveResource = player.state?.resource;
+      if (liveResource && !liveResource.ended) {
+        return;
+      }
+      const state = this.getState(guildId);
+      if (state.transitioning) return;
       this.handleTrackEnd(guildId).catch(error => console.error("❌ Track transition:", error?.message || error));
     });
 
