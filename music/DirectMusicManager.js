@@ -766,82 +766,53 @@ class DirectMusicManager {
     try {
       const context = state.autoplayContext;
       const recent = new Set(state.recent);
+      const normalize = value => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+      const author = normalize(context?.author);
+      const genre = normalize(context?.genre);
+      let candidates = [];
       let chosen = null;
-      let chosenGroup = "Autoplay";
 
-      const normalize = value => String(value || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      const wantedAuthor = normalize(context?.author);
-      const wantedGenre = normalize(context?.genre);
+      // Find multiple candidates, then enforce same artist OR same genre.
       const queries = [];
-      if (context?.author) queries.push({ query: context.author, mode: "artist" });
-      if (context?.genre) queries.push({ query: context.genre, mode: "genre" });
+      if (context?.author && context?.genre) queries.push(context.author + " " + context.genre);
+      if (context?.author) queries.push(context.author);
+      if (context?.genre) queries.push(context.genre);
 
-      if (!queries.length) {
-        const groupIndex = state.autoplayGroupIndex % AUTOPLAY_GROUPS.length;
-        const group = AUTOPLAY_GROUPS[groupIndex];
-        queries.push({ query: group.seeds[Math.floor(Math.random() * group.seeds.length)], mode: "general" });
-      }
-
-      for (const item of queries) {
-        const label = item.mode === "artist" ? "Same Artist" : item.mode === "genre" ? "Same Genre" : "Autoplay";
-        console.log("🔎 Direct autoplay [" + label + "]: " + item.query);
-        let result;
+      for (const query of queries) {
         try {
-          result = await this.search(item.query, this.client.user, { returnAll: true });
+          console.log("🔎 Direct autoplay related search: " + query);
+          const result = await this.search(query, this.client.user, { returnAll: true });
+          candidates.push(...(result.tracks || []));
         } catch (error) {
-          console.warn("⚠️ Direct autoplay search failed for \"" + item.query + "\":", error?.message || error);
-          continue;
-        }
-
-        const candidates = (result.tracks || [])
-          .filter(track => {
-            const length = Number(track.length || 0);
-            const id = this.getTrackId(track);
-            const title = String(track.title || "");
-            const author = normalize(track.author);
-            const genre = normalize(track.genre);
-
-            if (!track.url || !id || recent.has(id)) return false;
-            if (context?.id && id === context.id) return false;
-            if (!length || length > 8 * 60 * 1000) return false;
-            if (/\b(yt5s|youtube|playlist|compilation|meg[a\s-]?mix|full album|album mix|nonstop|continuous|\d+\s*hour|hour mix|top .* songs|best .* songs|latest .* songs|new .* songs|all .* songs|collection)\b/i.test(title)) return false;
-            if (item.mode === "artist" && wantedAuthor && author !== wantedAuthor) return false;
-            if (item.mode === "genre" && wantedGenre && genre !== wantedGenre) return false;
-            return true;
-          })
-          .sort((a, b) => {
-            const aAuthor = normalize(a.author);
-            const bAuthor = normalize(b.author);
-            const aGenre = normalize(a.genre);
-            const bGenre = normalize(b.genre);
-            const aArtist = wantedAuthor && aAuthor === wantedAuthor ? 1 : 0;
-            const bArtist = wantedAuthor && bAuthor === wantedAuthor ? 1 : 0;
-            if (aArtist !== bArtist) return bArtist - aArtist;
-            const aGenreMatch = wantedGenre && aGenre === wantedGenre ? 1 : 0;
-            const bGenreMatch = wantedGenre && bGenre === wantedGenre ? 1 : 0;
-            if (aGenreMatch !== bGenreMatch) return bGenreMatch - aGenreMatch;
-            return Number(b.playCount || 0) - Number(a.playCount || 0);
-          });
-
-        if (candidates.length) {
-          chosen = candidates[0];
-          chosenGroup = label;
-          break;
+          console.warn("⚠️ Autoplay search failed:", error?.message || error);
         }
       }
 
-      if (!chosen) throw new Error("No related single song found.");
+      const seen = new Set();
+      candidates = candidates.filter(track => {
+        const id = this.getTrackId(track);
+        if (!id || seen.has(id) || recent.has(id) || (context?.id && id === context.id)) return false;
+        seen.add(id);
+        const title = String(track.title || "");
+        const length = Number(track.length || 0);
+        if (!track.url || !length || length > 8 * 60 * 1000) return false;
+        if (/\b(playlist|compilation|meg[a\s-]?mix|full album|album mix|nonstop|continuous|\d+\s*hour|hour mix|top .* songs|best .* songs|latest .* songs|new .* songs|all .* songs|collection)\b/i.test(title)) return false;
+        return true;
+      });
 
+      // Same artist is preferred. If unavailable, use the same genre.
+      const sameArtist = candidates.filter(track => author && normalize(track.author) === author);
+      const sameGenre = candidates.filter(track => genre && normalize(track.genre) === genre);
+      const pool = sameArtist.length ? sameArtist : sameGenre;
+      if (!pool.length) throw new Error("No song found with the same artist or genre.");
+
+      chosen = pool.sort((a, b) => Number(b.playCount || 0) - Number(a.playCount || 0))[0];
+      const matchedArtist = author && normalize(chosen.author) === author;
       chosen.isAutoplay = true;
-      chosen.autoplayGroup = chosenGroup;
+      chosen.autoplayGroup = matchedArtist ? "Same Artist" : "Same Genre";
+
       const id = this.getTrackId(chosen);
       if (id) state.recent = [...state.recent, id].slice(-15);
-
       state.autoplayContext = {
         title: chosen.title,
         author: chosen.author || context?.author || null,
@@ -850,7 +821,7 @@ class DirectMusicManager {
       };
 
       await this.startTrack(guildId, chosen);
-      console.log("🎵 AUTOPLAY STARTED: " + chosen.title + " [" + chosenGroup + "]");
+      console.log("🎵 AUTOPLAY STARTED: " + chosen.title + " [" + chosen.autoplayGroup + "]");
       return true;
     } catch (error) {
       console.warn("⚠️ Direct autoplay search/play failed:", error?.message || error);
