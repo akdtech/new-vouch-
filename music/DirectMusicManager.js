@@ -416,7 +416,10 @@ class DirectMusicManager {
         );
       }
 
-      const minimum = Math.max(18, Math.min(70, tokens.length * 12));
+      // Autoplay discovery intentionally accepts broad artist/genre queries so
+      // it can collect multiple related songs. Normal /play still uses the
+      // stricter exact/close-match threshold below.
+      const minimum = returnAll ? 1 : Math.max(18, Math.min(70, tokens.length * 12));
       const exactTitleMatches = tracks.filter(track => normalize(track.title) === queryText);
       const strongTitleMatches = tracks.filter(track =>
         tokens.length > 0 && tokens.every(token => normalize(track.title).split(" ").includes(token))
@@ -801,13 +804,35 @@ class DirectMusicManager {
       });
 
       // Same artist is preferred. If unavailable, use the same genre.
-      const sameArtist = candidates.filter(track => author && normalize(track.author) === author);
-      const sameGenre = candidates.filter(track => genre && normalize(track.genre) === genre);
+      const artistTokens = author.split(" ").filter(Boolean);
+      const genreTokens = genre.split(" ").filter(Boolean);
+      const relatedScore = (value, targetTokens) => {
+        if (!value || !targetTokens.length) return 0;
+        const valueTokens = normalize(value).split(" ").filter(Boolean);
+        const valueSet = new Set(valueTokens);
+        const matched = targetTokens.filter(token => valueSet.has(token)).length;
+        return matched / targetTokens.length;
+      };
+
+      // Audius metadata is not always formatted identically (e.g. handles,
+      // punctuation, or genre labels), so use token overlap instead of exact
+      // string equality. A candidate must still have a verified artist or
+      // genre relationship; unrelated tracks are never accepted here.
+      const sameArtist = candidates
+        .map(track => ({ track, score: relatedScore(track.author, artistTokens) }))
+        .filter(item => artistTokens.length && item.score >= (artistTokens.length === 1 ? 1 : 0.5))
+        .sort((a, b) => b.score - a.score || Number(b.track.playCount || 0) - Number(a.track.playCount || 0))
+        .map(item => item.track);
+      const sameGenre = candidates
+        .map(track => ({ track, score: relatedScore(track.genre, genreTokens) }))
+        .filter(item => genreTokens.length && item.score >= (genreTokens.length === 1 ? 1 : 0.5))
+        .sort((a, b) => b.score - a.score || Number(b.track.playCount || 0) - Number(a.track.playCount || 0))
+        .map(item => item.track);
       const pool = sameArtist.length ? sameArtist : sameGenre;
       if (!pool.length) throw new Error("No song found with the same artist or genre.");
 
-      chosen = pool.sort((a, b) => Number(b.playCount || 0) - Number(a.playCount || 0))[0];
-      const matchedArtist = author && normalize(chosen.author) === author;
+      chosen = pool[0];
+      const matchedArtist = sameArtist.includes(chosen);
       chosen.isAutoplay = true;
       chosen.autoplayGroup = matchedArtist ? "Same Artist" : "Same Genre";
 
