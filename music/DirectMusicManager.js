@@ -226,7 +226,8 @@ class DirectMusicManager {
     });
   }
 
-  async search(query, requester) {
+  async search(query, requester, options = {}) {
+    const returnAll = Boolean(options?.returnAll);
     const clean = this.cleanQuery(query);
     if (!clean) throw new Error("Please provide a song name.");
 
@@ -434,6 +435,13 @@ class DirectMusicManager {
       }
 
       console.log(`🎯 MUSIC SEARCH: "${clean}" -> "${best.title}" by "${best.author}" [score=${best._searchScore}]`);
+      if (returnAll) {
+        const selectedTracks = tracks
+          .filter(track => Number(track._searchScore || 0) >= minimum)
+          .slice(0, 25)
+          .map(({ _searchScore, ...track }) => track);
+        return { type: "track", tracks: selectedTracks };
+      }
       const { _searchScore, ...selectedTrack } = best;
       return { type: "track", tracks: [selectedTrack] };
     } finally {
@@ -757,68 +765,95 @@ class DirectMusicManager {
     state.autoplayBusy = true;
     try {
       const context = state.autoplayContext;
-      let queries = [];
+      const recent = new Set(state.recent);
+      let chosen = null;
+      let chosenGroup = "Autoplay";
 
-      if (context?.author) {
-        queries.push(context.author);
-        if (context.genre) queries.push(`${context.genre} ${context.author}`);
-      }
-      if (context?.genre) queries.push(context.genre);
+      const normalize = value => String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const wantedAuthor = normalize(context?.author);
+      const wantedGenre = normalize(context?.genre);
+      const queries = [];
+      if (context?.author) queries.push({ query: context.author, mode: "artist" });
+      if (context?.genre) queries.push({ query: context.genre, mode: "genre" });
+
       if (!queries.length) {
         const groupIndex = state.autoplayGroupIndex % AUTOPLAY_GROUPS.length;
         const group = AUTOPLAY_GROUPS[groupIndex];
-        queries.push(group.seeds[Math.floor(Math.random() * group.seeds.length)]);
+        queries.push({ query: group.seeds[Math.floor(Math.random() * group.seeds.length)], mode: "general" });
       }
 
-      const recent = new Set(state.recent);
-      let chosen = null;
-      let chosenGroup = context?.author ? "Same Artist" : context?.genre ? "Same Genre" : "Autoplay";
+      for (const item of queries) {
+        const label = item.mode === "artist" ? "Same Artist" : item.mode === "genre" ? "Same Genre" : "Autoplay";
+        console.log("🔎 Direct autoplay [" + label + "]: " + item.query);
+        let result;
+        try {
+          result = await this.search(item.query, this.client.user, { returnAll: true });
+        } catch (error) {
+          console.warn("⚠️ Direct autoplay search failed for \"" + item.query + "\":", error?.message || error);
+          continue;
+        }
 
-      // Try the user's current artist/genre context first. Only accept
-      // normal song lengths; reject long mixes/compilations.
-      for (const query of queries) {
-        console.log(`🔎 Direct autoplay [${chosenGroup}]: ${query}`);
-        const result = await this.search(query, this.client.user);
-        const candidates = result.tracks.filter(t => {
-          const length = Number(t.length || 0);
-          const id = this.getTrackId(t);
-          const title = String(t.title || "");
-          if (!t.url || !id || recent.has(id)) return false;
-          if (context?.id && id === context.id) return false;
-          if (/\b(yt5s|youtube|playlist|compilation|meg[a\s-]?mix|full album|album mix|nonstop|continuous|\d+\s*hour|hour mix|top .* songs|best .* songs|latest .* songs|new .* songs|all .* songs|collection)\b/i.test(title)) return false;
-          return length > 0 && length <= 8 * 60 * 1000;
-        }).sort((a, b) => {
-          const aAuthor = String(a.author || "").toLowerCase();
-          const bAuthor = String(b.author || "").toLowerCase();
-          const wantedAuthor = String(context?.author || "").toLowerCase();
-          const aSameArtist = wantedAuthor && aAuthor === wantedAuthor ? 1 : 0;
-          const bSameArtist = wantedAuthor && bAuthor === wantedAuthor ? 1 : 0;
-          if (aSameArtist !== bSameArtist) return bSameArtist - aSameArtist;
-          return Number(b.playCount || 0) - Number(a.playCount || 0);
-        });
+        const candidates = (result.tracks || [])
+          .filter(track => {
+            const length = Number(track.length || 0);
+            const id = this.getTrackId(track);
+            const title = String(track.title || "");
+            const author = normalize(track.author);
+            const genre = normalize(track.genre);
+
+            if (!track.url || !id || recent.has(id)) return false;
+            if (context?.id && id === context.id) return false;
+            if (!length || length > 8 * 60 * 1000) return false;
+            if (/\b(yt5s|youtube|playlist|compilation|meg[a\s-]?mix|full album|album mix|nonstop|continuous|\d+\s*hour|hour mix|top .* songs|best .* songs|latest .* songs|new .* songs|all .* songs|collection)\b/i.test(title)) return false;
+            if (item.mode === "artist" && wantedAuthor && author !== wantedAuthor) return false;
+            if (item.mode === "genre" && wantedGenre && genre !== wantedGenre) return false;
+            return true;
+          })
+          .sort((a, b) => {
+            const aAuthor = normalize(a.author);
+            const bAuthor = normalize(b.author);
+            const aGenre = normalize(a.genre);
+            const bGenre = normalize(b.genre);
+            const aArtist = wantedAuthor && aAuthor === wantedAuthor ? 1 : 0;
+            const bArtist = wantedAuthor && bAuthor === wantedAuthor ? 1 : 0;
+            if (aArtist !== bArtist) return bArtist - aArtist;
+            const aGenreMatch = wantedGenre && aGenre === wantedGenre ? 1 : 0;
+            const bGenreMatch = wantedGenre && bGenre === wantedGenre ? 1 : 0;
+            if (aGenreMatch !== bGenreMatch) return bGenreMatch - aGenreMatch;
+            return Number(b.playCount || 0) - Number(a.playCount || 0);
+          });
 
         if (candidates.length) {
-          // Play exactly one normal track at a time. Never enqueue or select
-          // a playlist/compilation/mix as the next track.
           chosen = candidates[0];
+          chosenGroup = label;
           break;
         }
       }
 
-      if (!chosen) {
-        throw new Error("No short related track found.");
-      }
+      if (!chosen) throw new Error("No related single song found.");
 
       chosen.isAutoplay = true;
       chosen.autoplayGroup = chosenGroup;
       const id = this.getTrackId(chosen);
       if (id) state.recent = [...state.recent, id].slice(-15);
 
+      state.autoplayContext = {
+        title: chosen.title,
+        author: chosen.author || context?.author || null,
+        genre: chosen.genre || context?.genre || null,
+        id
+      };
+
       await this.startTrack(guildId, chosen);
-      console.log(`🎵 AUTOPLAY STARTED: ${chosen.title} [${chosen.autoplayGroup}]`);
+      console.log("🎵 AUTOPLAY STARTED: " + chosen.title + " [" + chosenGroup + "]");
       return true;
     } catch (error) {
-      console.warn(`⚠️ Direct autoplay search/play failed: ${error?.message || error}`);
+      console.warn("⚠️ Direct autoplay search/play failed:", error?.message || error);
       if (state.retryTimer) clearTimeout(state.retryTimer);
       state.retryTimer = setTimeout(() => {
         state.retryTimer = null;
@@ -829,7 +864,6 @@ class DirectMusicManager {
       state.autoplayBusy = false;
     }
   }
-
   async pause(guildId) {
     const player = this.players.get(guildId);
     if (!player) throw new Error("Music player is not active.");
