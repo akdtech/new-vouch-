@@ -986,19 +986,61 @@ class DirectMusicManager {
     const guild = this.client.guilds.cache.get(guildId);
     if (!guild) throw new Error("Server is not available.");
     const me = guild.members.me;
-    const ids = [this.musicTextChannelId].filter(Boolean);
-    for (const id of ids) {
-      const channel = guild.channels.cache.get(id);
-      if (channel?.isTextBased?.() && channel?.isSendable?.() && (!me || channel.permissionsFor(me)?.has("SendMessages"))) return channel;
+
+    const canUse = channel =>
+      channel?.isTextBased?.() &&
+      channel?.isSendable?.() &&
+      (!me || channel.permissionsFor(me)?.has("SendMessages")) &&
+      (!me || channel.permissionsFor(me)?.has("ViewChannel")) &&
+      (!me || channel.permissionsFor(me)?.has("EmbedLinks")) &&
+      (!me || channel.permissionsFor(me)?.has("ReadMessageHistory"));
+
+    // Keep the panel beside the actual 24/7 voice channel. Do not put the
+    // music status/control message into unrelated channels such as support.
+    const voiceId = guildId === this.musicGuildId ? this.musicVoiceChannelId : null;
+    const voice = voiceId ? guild.channels.cache.get(voiceId) : null;
+
+    if (voice) {
+      const voiceName = String(voice.name || "").toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ").trim();
+
+      // Prefer a text channel with the same name in the same category.
+      const siblingExact = guild.channels.cache.find(channel => {
+        if (!canUse(channel) || channel.parentId !== voice.parentId) return false;
+        const name = String(channel.name || "").toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ").trim();
+        return name === voiceName;
+      });
+      if (siblingExact) return siblingExact;
+
+      // Otherwise use a music/status text channel in the same category.
+      const siblingMusic = guild.channels.cache.find(channel => {
+        if (!canUse(channel) || channel.parentId !== voice.parentId) return false;
+        const name = String(channel.name || "").toLowerCase();
+        return /music|247|24 7|status|now playing/.test(name);
+      });
+      if (siblingMusic) return siblingMusic;
     }
-    const named = guild.channels.cache.find(c => {
-      if (!c?.isTextBased?.() || !c?.isSendable?.()) return false;
-      if (me && !c.permissionsFor(me)?.has("SendMessages")) return false;
-      const n = String(c.name || "").toLowerCase();
-      return n.includes("music");
+
+    // Respect an explicitly configured music text channel if it is usable.
+    if (this.musicTextChannelId) {
+      const configured = guild.channels.cache.get(this.musicTextChannelId);
+      if (canUse(configured)) return configured;
+    }
+
+    // Last music-specific fallback anywhere in the guild.
+    const named = guild.channels.cache.find(channel => {
+      if (!canUse(channel)) return false;
+      const name = String(channel.name || "").toLowerCase();
+      return /music|247|24 7|now playing/.test(name);
     });
     if (named) return named;
-    const fallback = guild.systemChannel?.isTextBased?.() && guild.systemChannel?.isSendable?.() ? guild.systemChannel : guild.channels.cache.find(c => c?.isTextBased?.() && c?.isSendable?.() && (!me || c.permissionsFor(me)?.has("SendMessages")));
+
+    // Only use the system/first writable text channel if there is no
+    // music-associated channel at all.
+    const fallback = guild.systemChannel && canUse(guild.systemChannel)
+      ? guild.systemChannel
+      : guild.channels.cache.find(channel => canUse(channel));
     if (!fallback) throw new Error("No writable text channel found for the music panel.");
     return fallback;
   }
