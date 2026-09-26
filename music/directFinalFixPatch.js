@@ -50,6 +50,49 @@ const clean = v => String(v || "").replace(/\s+/g, " ").trim();
 const idOf = t => t?.identifier || t?.id || t?.url || null;
 const kill = p => { try { p?.kill("SIGKILL"); } catch {} };
 
+
+async function audiusFallbackTrack(query, requester) {
+  try {
+    const mod = require("./directAudiusRecoveryPatch");
+    if (typeof mod?.audiusSearch !== "function") return null;
+    const matches = await mod.audiusSearch(clean(query), requester);
+    if (!Array.isArray(matches) || !matches.length) return null;
+    return matches.find(x => clean(x.title).toLowerCase() === clean(String(query).split(" ").slice(0, -1).join(" ")).toLowerCase()) || matches[0];
+  } catch (error) {
+    console.warn(`⚠️ Audius fallback lookup failed: ${clean(error?.message || error).slice(-500)}`);
+    return null;
+  }
+}
+
+async function startAudiusFallback(manager, guildId, track, startMs, handoff) {
+  try {
+    const mod = require("./directAudiusRecoveryPatch");
+    if (typeof mod?.playAudius !== "function") return false;
+    const query = `${clean(track?.title)} ${clean(track?.author)}`.trim();
+    const match = await audiusFallbackTrack(query, track?.requester || manager.client.user);
+    if (!match) return false;
+    match.isAutoplay = Boolean(track?.isAutoplay);
+    match.autoplayGroup = track?.autoplayGroup;
+    await mod.playAudius(manager, guildId, match, startMs, { handoff });
+    console.log(`🎵 Exact-recording fallback started: ${match.title} — ${match.author}`);
+    return true;
+  } catch (error) {
+    console.warn(`⚠️ Exact-recording fallback failed: ${clean(error?.message || error).slice(-700)}`);
+    return false;
+  }
+}
+
+async function audiusTrendingFallback(requester) {
+  try {
+    const mod = require("./directAudiusRecoveryPatch");
+    if (typeof mod?.audiusTrending !== "function") return [];
+    return await mod.audiusTrending(requester);
+  } catch (error) {
+    console.warn(`⚠️ Audius trending fallback failed: ${clean(error?.message || error).slice(-500)}`);
+    return [];
+  }
+}
+
 function youtubeArgs(profile = "default,web_embedded") {
   const args = [
     "--extractor-args", `youtube:player_client=${profile};fetch_pot=always;use_ad_playback_context=false`,
@@ -539,7 +582,9 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
       sourceUrl = resolved.url;
       sourceHeaders = resolved.headers || "";
     } catch (error) {
-      console.warn(`⚠️ All YouTube playback routes failed; trying SoundCloud: ${clean(error?.message || error).slice(-700)}`);
+      console.warn(`⚠️ All YouTube playback routes failed; trying exact Audius recording: ${clean(error?.message || error).slice(-700)}`);
+      const audiusStarted = await startAudiusFallback(manager, guildId, track, startMs, handoff);
+      if (audiusStarted) return true;
       return await startSoundCloud(manager, guildId, track, startMs, token, handoff);
     }
   }
