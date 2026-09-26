@@ -242,9 +242,14 @@ async function getInvidiousStream(id) {
 }
 
 async function resolveYouTubeUrl(track) {
+  // Prefer authenticated YouTube clients when cookies are available.
+  // Premium/account cookies are kept in Railway as YOUTUBE_COOKIES_B64.
+  // PO-token support remains enabled by the existing providers.
   const profiles = [
-    "mweb",
+    "web_creator",
+    "web_music",
     "web_safari",
+    "mweb",
     "android_vr"
   ];
   let lastError = null;
