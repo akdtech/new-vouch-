@@ -13,7 +13,7 @@ module.exports = {
       return interaction.editReply("▶️ **Now playing on Spotify**\\n🎵 **" + track.title + "** — " + track.author + "\\n🎧 Device: **your active Spotify device**\\n👤 Controller: **" + (controller.display_name || "Spotify") + "**\\n🔗 " + track.url);
     } catch (error) {
       console.error("play error:", error);
-      return interaction.editReply("❌ " + String(error?.message || error).replace(/\\s+/g, " ").slice(0, 1800));
+      return interaction.editReply("❌ " + String(error?.message || error).replace(/\s+/g, " ").slice(0, 1800));
     }
   }
 };
