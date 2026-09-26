@@ -85,9 +85,7 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
         button("death_music_queue", "Queue", "📜")
       );
       const row2 = new ActionRowBuilder().addComponents(
-        button("death_music_autoplay", auto ? "Autoplay ON" : "Autoplay OFF", "♾️", auto ? ButtonStyle.Success : ButtonStyle.Secondary),
-        button("death_music_vol_down", "Volume −", "🔉"),
-        button("death_music_vol_up", "Volume +", "🔊")
+        button("death_music_autoplay", auto ? "Autoplay ON" : "Autoplay OFF", "♾️", auto ? ButtonStyle.Success : ButtonStyle.Secondary)
       );
 
       const payload = { embeds: [embed], components: [row1, row2] };
@@ -154,5 +152,5 @@ if (!MusicManager.prototype.__deathDirectPanelPatched) {
     }
   };
 
-  console.log("🎨 DEATH rich sticky panel loaded: ONE live message + artwork + 7 focused controls; buttons always interactive.");
+  console.log("🎨 DEATH rich sticky panel loaded: ONE live message + artwork + 5 focused controls; buttons always interactive.");
 }
