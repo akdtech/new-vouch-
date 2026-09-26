@@ -192,7 +192,7 @@ class SpotifyController {
 
   async search(discordUserId, query) {
     let q = String(query || "").trim();
-    const match = q.match(/open\\.spotify\\.com\\/track\\/([A-Za-z0-9]+)/i);
+    const match = q.match(/open\.spotify\.com\/track\/([A-Za-z0-9]+)/i);
     if (match) q = `track:${match[1]}`;
     if (!q) throw new Error("Enter a song name or Spotify track link.");
     const url = new URL("/search", API);
