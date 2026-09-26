@@ -305,3 +305,5 @@ MusicManager.prototype.search = async function accurateMusicSearch(query, reques
   return previousSearch.call(this, q, requester, options);
 };
 
+
+module.exports = { playAudius, audiusSearch, audiusTrending };
