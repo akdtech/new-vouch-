@@ -248,113 +248,125 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
   const player = manager.players.get(guildId) || manager.ensurePlayer(guildId);
   manager.bindPlayerEvents(guildId, player);
 
-  // Fast path: resolve the YouTube media URL first, then let FFmpeg stream it.
-  // This avoids waiting for yt-dlp to download/buffer audio before FFmpeg starts.
-  try {
-    const result = await runYtDlp([
-      "--get-url",
-      "--format", "bestaudio[acodec=opus]/bestaudio/best",
-      "--no-check-certificates",
-      track.url
-    ], 7000, "mweb");
-
-    const sourceUrl = String(result.stdout || "").trim().split(/\r?\n/).filter(Boolean)[0];
-    if (!sourceUrl) throw new Error("yt-dlp returned no direct media URL.");
-
-    const oldStream = manager.streams.get(guildId);
-    const ff = spawn(FFMPEG, [
-      "-hide_banner", "-loglevel", "error", "-nostdin",
-      "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "3",
-      "-user_agent", RECONNECT_UA,
-      "-i", sourceUrl,
-      ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-      "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-
-    const first = await waitForPcm(ff, 8000);
-    if (state.playbackToken !== token) {
-      kill(ff);
-      throw new Error("playback attempt superseded");
-    }
-
-    const pcm = new PassThrough({ highWaterMark: 1024 * 1024 });
-    const resource = createAudioResource(pcm, {
-      inputType: StreamType.Raw,
-      inlineVolume: true,
-      metadata: track
-    });
-    resource.volume?.setVolume(Math.max(0.01, Number(state.volume || 70) / 100));
-
-    state.audioResource = resource;
-    state.current = track;
-    state.pendingTrack = null;
-    state.transitioning = false;
-    state.paused = false;
-    state.startedAt = Date.now();
-    state.positionOffset = Math.max(0, Number(startMs || 0));
-    manager.streams.set(guildId, { ff, pcm, resource, source: "yt-dlp-fast-url" });
-
-    pcm.write(first);
-    ff.stdout.pipe(pcm);
-    player.play(resource);
-    if (handoff) retire(oldStream);
-
-    safeStatus(manager, guildId, track, "Playing");
-    safePanel(manager, guildId);
-    console.log(`⚡ Fast YouTube playback started: ${manager.getTrackTitle(track)}`);
-    return true;
-  } catch (fastError) {
-    console.warn(`⚠️ Fast YouTube path failed; using buffered recovery: ${clean(fastError?.message || fastError).slice(-500)}`);
-  }
-
-  // Recovery: original yt-dlp -> FFmpeg pipe.
   const yt = spawn(YTDLP, [
-    "--no-warnings", "--no-progress", "--no-playlist", "--force-ipv4",
+    "--no-warnings",
+    "--no-progress",
+    "--no-playlist",
+    "--force-ipv4",
     ...cookieArgs(),
-    "--retries", "1", "--fragment-retries", "1",
+    "--retries", "1",
+    "--fragment-retries", "1",
     "--extractor-args", "youtube:player_client=mweb;fetch_pot=always;use_ad_playback_context=false",
     "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno",
-    "--format", "bestaudio/best", "--output", "-", track.url
+    "--format", "bestaudio/best",
+    "--output", "-",
+    track.url
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   const ff = spawn(FFMPEG, [
-    "-hide_banner", "-loglevel", "error", "-nostdin", "-i", "pipe:0",
+    "-hide_banner", "-loglevel", "error", "-nostdin",
+    "-i", "pipe:0",
     ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
     "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
   ], { stdio: ["pipe", "pipe", "pipe"] });
 
   const oldStream = manager.streams.get(guildId);
-  let ytErr="", ffErr="";
+  let ytErr = "", ffErr = "";
+  let settled = false;
   const pcm = new PassThrough({ highWaterMark: 1024 * 1024 });
 
-  const first = await new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{ kill(yt); kill(ff); reject(new Error(`yt-dlp recovery produced no PCM within ${Math.round(PCM_TIMEOUT/1000)}s. ${clean(ytErr||ffErr).slice(-900)}`)); },PCM_TIMEOUT);
-    const fail=e=>{ clearTimeout(timer); reject(e instanceof Error?e:new Error(String(e))); };
-    ff.stdout.once("data",chunk=>{ if(!chunk?.length) return fail(new Error("yt-dlp recovery returned empty PCM.")); clearTimeout(timer); resolve(chunk); });
-    yt.on("error",fail); ff.on("error",fail);
-    yt.on("close",code=>{ if(code!==0) fail(new Error(`yt-dlp exited ${code}: ${clean(ytErr).slice(-900)}`)); });
-    ff.on("close",code=>{ if(code!==0) fail(new Error(`FFmpeg exited ${code}: ${clean(ffErr).slice(-700)}`)); });
-    yt.stderr.on("data",c=>{ ytErr+=c.toString(); if(ytErr.length>6000) ytErr=ytErr.slice(-6000); });
-    ff.stderr.on("data",c=>{ ffErr+=c.toString(); if(ffErr.length>4000) ffErr=ffErr.slice(-4000); });
-    yt.stdout.on("error",e=>{ if(e?.code!=="EPIPE") fail(e); });
-    ff.stdin.on("error",e=>{ if(e?.code!=="EPIPE") fail(e); });
+  const fail = error => {
+    if (settled) return;
+    settled = true;
+    try { yt.stdout?.unpipe(ff.stdin); } catch {}
+    try { ff.stdin?.end(); } catch {}
+    kill(yt); kill(ff);
+    try { pcm.destroy(); } catch {}
+    throw error instanceof Error ? error : new Error(String(error));
+  };
+
+  yt.stderr.on("data", chunk => {
+    ytErr += chunk.toString();
+    if (ytErr.length > 6000) ytErr = ytErr.slice(-6000);
+  });
+  ff.stderr.on("data", chunk => {
+    ffErr += chunk.toString();
+    if (ffErr.length > 4000) ffErr = ffErr.slice(-4000);
+  });
+
+  const first = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      kill(yt); kill(ff);
+      reject(new Error(`yt-dlp pipe produced no PCM within ${Math.round(PCM_TIMEOUT / 1000)}s. ${clean(ytErr || ffErr).slice(-900)}`));
+    }, PCM_TIMEOUT);
+
+    const failLocal = error => {
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+
+    ff.stdout.once("data", chunk => {
+      if (!chunk?.length) return failLocal(new Error("yt-dlp pipe returned empty PCM."));
+      clearTimeout(timer);
+      resolve(chunk);
+    });
+
+    yt.on("error", failLocal);
+    ff.on("error", failLocal);
+    yt.on("close", code => {
+      if (code !== 0) failLocal(new Error(`yt-dlp exited ${code}: ${clean(ytErr).slice(-900)}`));
+    });
+    ff.on("close", code => {
+      if (code !== 0) failLocal(new Error(`FFmpeg exited ${code}: ${clean(ffErr).slice(-700)}`));
+    });
+
+    yt.stdout.on("error", error => {
+      if (error?.code !== "EPIPE") failLocal(error);
+    });
+    ff.stdin.on("error", error => {
+      if (error?.code !== "EPIPE") failLocal(error);
+    });
+
     yt.stdout.pipe(ff.stdin);
-  }).catch(error=>{ kill(yt); kill(ff); throw error; });
+  }).catch(error => {
+    kill(yt); kill(ff);
+    throw error;
+  });
 
-  if(state.playbackToken!==token){ kill(yt); kill(ff); throw new Error("playback attempt superseded"); }
+  if (state.playbackToken !== token) {
+    kill(yt); kill(ff);
+    throw new Error("playback attempt superseded");
+  }
 
-  const resource=createAudioResource(pcm,{inputType:StreamType.Raw,inlineVolume:true,metadata:track});
-  resource.volume?.setVolume(Math.max(0.01,Number(state.volume||70)/100));
-  state.audioResource=resource; state.current=track; state.pendingTrack=null; state.transitioning=false;
-  state.paused=false; state.startedAt=Date.now(); state.positionOffset=Math.max(0,Number(startMs||0));
-  manager.streams.set(guildId,{yt,ff,pcm,resource,source:"yt-dlp-pipe"});
-  pcm.write(first); ff.stdout.pipe(pcm); player.play(resource); if(handoff) retire(oldStream);
-  safeStatus(manager,guildId,track,"Playing"); safePanel(manager,guildId);
-  console.log(`🎧 yt-dlp recovery playback started: ${manager.getTrackTitle(track)}`);
+  const resource = createAudioResource(pcm, {
+    inputType: StreamType.Raw,
+    inlineVolume: true,
+    metadata: track
+  });
+  resource.volume?.setVolume(Math.max(0.01, Number(state.volume || 70) / 100));
+
+  state.audioResource = resource;
+  state.current = track;
+  state.pendingTrack = null;
+  state.transitioning = false;
+  state.paused = false;
+  state.startedAt = Date.now();
+  state.positionOffset = Math.max(0, Number(startMs || 0));
+  manager.streams.set(guildId, { yt, ff, pcm, resource, source: "yt-dlp-pipe" });
+
+  pcm.write(first);
+  ff.stdout.pipe(pcm);
+  player.play(resource);
+  if (handoff) retire(oldStream);
+
+  safeStatus(manager, guildId, track, "Playing");
+  safePanel(manager, guildId);
+  console.log(`🎧 yt-dlp pipe playback started: ${manager.getTrackTitle(track)}`);
   return true;
 }
+
 async function soundCloudSearch(query, requester) {
   const q = clean(query);
   if (!q) return [];
