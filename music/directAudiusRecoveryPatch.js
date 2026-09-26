@@ -193,165 +193,106 @@ async function playAudius(manager, guildId, track, startMs = 0, options = {}) {
   return true;
 }
 
-const previousSearch = MusicManager.prototype.search;
-const previousStartTrack = MusicManager.prototype.startTrack;
 
-MusicManager.prototype.search = async function audiusFirstSearch(query, requester, options = {}) {
-  const q = typeof query === "string" ? this.cleanQuery(query) : this.cleanQuery(query?.query || query?.search || query?.name);
-  if (!q) throw new Error("Please provide a song name or URL.");
+const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
+const SEARCH_CACHE = new Map();
+const normalizeKey = value => clean(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 
-  // Non-YouTube direct URLs are still supported normally.
-  if (/^https?:\/\//i.test(q) && !/youtube\.com|youtu\.be/i.test(q)) {
-    return previousSearch.call(this, q, requester, options);
-  }
-
-  try {
-    const tracks = await audiusSearch(q, requester);
-    if (tracks.length) {
-      const selected = tracks.slice(0, options?.returnAll ? 20 : 6).map(({_score, ...track}) => track);
-      console.log("🎵 Audius-first search: \"" + q + "\" -> \"" + selected[0].title + "\" by \"" + selected[0].author + "\"");
-      return { type: "track", tracks: selected };
-    }
-  } catch (error) {
-    console.warn("⚠️ Audius search failed for \"" + q + "\": " + (error?.message || error));
-  }
-
-  // Keep the existing engine as a fallback for environments where Audius is
-  // temporarily unavailable.
-  return previousSearch.call(this, q, requester, options);
-};
-
-async function audiusTrending(requester) {
+async function youtubeSearch(query, requester) {
+  const q = clean(query);
+  if (!q) return [];
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), 6500);
   try {
-    const url = new URL(AUDIUS_API + "/tracks/trending");
-    url.searchParams.set("time", "week");
-    url.searchParams.set("limit", "100");
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { accept: "application/json", "user-agent": "DEATH-GMAO-Music/6.0" }
-    });
-    if (!response.ok) throw new Error("Audius trending HTTP " + response.status);
-    const json = await response.json();
-    const items = Array.isArray(json?.data) ? json.data : [];
-    return items
-      .filter(x => x?.id && x?.title)
-      .map(x => ({
-        identifier: String(x.id),
-        id: String(x.id),
-        url: AUDIUS_API + "/tracks/" + encodeURIComponent(x.id) + "/stream",
-        title: clean(x.title),
-        author: clean(x.user?.name || x.user?.handle || "Unknown artist"),
-        length: Number(x.duration || 0) * 1000,
-        genre: x.genre || x.tags?.genre || null,
-        requester: requester || null,
-        thumbnail: x.artwork?.["480x480"] || x.artwork?.["150x150"] || null,
-        source: "audius"
-      }))
-      .filter(t => Number(t.length || 0) >= 60 * 1000 && Number(t.length || 0) <= 8 * 60 * 1000)
-      .filter(t => !badTitle.test(t.title));
+    const args = [
+      "--no-warnings", "--no-progress", "--no-playlist",
+      "--flat-playlist", "--dump-single-json",
+      `ytsearch8:${q} official audio`
+    ];
+    const child = spawn(YTDLP, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    const timeout = setTimeout(() => kill(child), 6000);
+    child.stdout.on("data", x => { stdout += x.toString(); if (stdout.length > 120000) stdout = stdout.slice(-120000); });
+    child.stderr.on("data", x => { stderr += x.toString(); if (stderr.length > 5000) stderr = stderr.slice(-5000); });
+    const code = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    }).finally(() => clearTimeout(timeout));
+    if (code !== 0) throw new Error(clean(stderr).slice(-800) || "YouTube search failed");
+    const data = JSON.parse(stdout || "{}");
+    const entries = Array.isArray(data?.entries) ? data.entries : [];
+    const norm = normalizeKey(q);
+    const tokens = norm.split(" ").filter(Boolean);
+    const bad = /\b(playlist|mix|compilation|full album|album mix|nonstop|continuous|radio|medley|meg[a\s-]?mix|hour mix|karaoke|reaction|review|sped up|slowed|nightcore|8d|remix)\b/i;
+    const scored = entries.filter(x => x?.id && x?.title && !bad.test(x.title)).map(x => {
+      const title = normalizeKey(x.title);
+      const channel = normalizeKey(x.channel || x.uploader || "");
+      const titleTokens = new Set(title.split(" "));
+      let score = tokens.filter(t => titleTokens.has(t)).length * 25;
+      if (tokens.length && tokens.every(t => titleTokens.has(t))) score += 100;
+      if (title === norm) score += 300;
+      if (title.includes(norm)) score += 180;
+      if (/\b(official|audio|lyrics|lyric video)\b/i.test(x.title)) score += 25;
+      if (/\b(topic|records|music|vevo)\b/i.test(channel)) score += 10;
+      return { x, score };
+    }).sort((a,b) => b.score - a.score);
+    return scored.slice(0, 4).map(({x}) => ({
+      identifier: String(x.id), id: String(x.id),
+      url: `https://www.youtube.com/watch?v=${x.id}`,
+      title: clean(x.title), author: clean(x.channel || x.uploader || "Unknown artist"),
+      length: Number(x.duration || 0) * 1000, requester: requester || null,
+      thumbnail: x.thumbnail || `https://i.ytimg.com/vi/${x.id}/hqdefault.jpg`,
+      source: "youtube-search"
+    }));
   } finally {
     clearTimeout(timer);
   }
 }
 
-const previousAutoplayNext = MusicManager.prototype.autoplayNext;
+const previousSearch = MusicManager.prototype.search;
+const previousStartTrack = MusicManager.prototype.startTrack;
 
-MusicManager.prototype.autoplayNext = async function audiusAutoplayNext(guildId) {
-  const state = this.getState(guildId);
-  const player = this.players.get(guildId) || this.ensurePlayer(guildId);
-  if (!state.autoplay || state.intentionalLeave || state.autoplayBusy) return false;
-  if (state.current || state.queue.length) return false;
-  if (Number(state.autoplayBlockedUntil || 0) > Date.now()) return false;
+MusicManager.prototype.search = async function accurateMusicSearch(query, requester, options = {}) {
+  const q = typeof query === "string" ? this.cleanQuery(query) : this.cleanQuery(query?.query || query?.search || query?.name);
+  if (!q) throw new Error("Please provide a song name or URL.");
 
-  state.autoplayBusy = true;
-  state.transitioning = true;
+  if (/^https?:\\/\\//i.test(q) && !/youtube\\.com|youtu\\.be/i.test(q)) {
+    return previousSearch.call(this, q, requester, options);
+  }
+
+  const key = normalizeKey(q);
+  const cached = SEARCH_CACHE.get(key);
+  if (cached && Date.now() - cached.at < 6 * 60 * 60 * 1000) {
+    console.log("⚡ MUSIC CACHE HIT: \"" + q + "\" -> \"" + cached.track.title + "\"");
+    return { type: "track", tracks: [{ ...cached.track, requester: requester || cached.track.requester }] };
+  }
+
+  // Search YouTube for the exact recording first. This gives us the real
+  // YouTube title/artist/video ID instead of an unrelated Audius upload.
   try {
-    const ctx = state.autoplayContext || {};
-    const recent = new Set(Array.isArray(state.recent) ? state.recent : []);
-    let candidates = [];
-
-    // When we know the artist, search that artist first so Skip/end-of-track
-    // stays close to the current artist/genre instead of jumping randomly.
-    if (clean(ctx.artist || ctx.author)) {
-      const artist = clean(ctx.artist || ctx.author);
-      try { candidates.push(...await audiusSearch(artist, this.client.user)); } catch {}
-      if (clean(ctx.title)) {
-        try { candidates.push(...await audiusSearch(artist + " similar " + clean(ctx.title), this.client.user)); } catch {}
-      }
+    const yt = await youtubeSearch(q, requester);
+    if (yt.length) {
+      const track = yt[0];
+      SEARCH_CACHE.set(key, { at: Date.now(), track });
+      console.log("🎯 ACCURATE YOUTUBE SEARCH: \"" + q + "\" -> \"" + track.title + "\" by \"" + track.author + "\"");
+      return { type: "track", tracks: [track] };
     }
-
-    // Startup has no artist context, so use Audius' real trending endpoint
-    // instead of YouTube search phrases that are commonly playlists/mixes.
-    if (!candidates.length) {
-      try { candidates = await audiusTrending(this.client.user); } catch (error) {
-        console.warn("⚠️ Audius trending autoplay failed: " + (error?.message || error));
-      }
-    }
-
-    candidates = candidates
-      .filter(t => t?.source === "audius" && t?.url)
-      .filter(t => Number(t.length || 0) >= 60 * 1000 && Number(t.length || 0) <= 8 * 60 * 1000)
-      .filter(t => !badTitle.test(t.title))
-      .filter(t => !recent.has(idOf(t)));
-
-    if (clean(ctx.artist || ctx.author)) {
-      const artist = clean(ctx.artist || ctx.author).toLowerCase();
-      candidates.sort((a, b) => {
-        const aa = clean(a.author).toLowerCase().includes(artist) ? 1 : 0;
-        const bb = clean(b.author).toLowerCase().includes(artist) ? 1 : 0;
-        return bb - aa;
-      });
-    }
-
-    const chosen = candidates[0];
-    if (!chosen) {
-      state.transitioning = false;
-      state.autoplayBusy = false;
-      state.autoplayBlockedUntil = Date.now() + 10000;
-      console.warn("⚠️ Audius autoplay found no suitable track.");
-      return false;
-    }
-
-    chosen.isAutoplay = true;
-    chosen.autoplayGroup = clean(ctx.artist || ctx.author)
-      ? "Related to " + clean(ctx.artist || ctx.author)
-      : "Audius Trending";
-
-    await this.startTrack(guildId, chosen, 0, { handoff: false });
-    const id = idOf(chosen);
-    if (id) state.recent = [...state.recent, id].slice(-20);
-    state.autoplayContext = {
-      artist: clean(chosen.author),
-      title: clean(chosen.title),
-      query: clean(chosen.title),
-      words: clean(chosen.title).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
-    };
-    state.autoplayBlockedUntil = 0;
-    state.transitioning = false;
-    console.log("🎯 Audius autoplay started: " + chosen.title + " — " + chosen.author);
-    return true;
   } catch (error) {
-    state.transitioning = false;
-    state.current = null;
-    state.autoplayBlockedUntil = Date.now() + 10000;
-    console.warn("⚠️ Audius autoplay recovery failed: " + (error?.message || error));
-    return false;
-  } finally {
-    state.autoplayBusy = false;
+    console.warn("⚠️ YouTube search unavailable; trying Audius exact-match fallback:", error?.message || error);
   }
-};
 
-MusicManager.prototype.startTrack = async function audiusAwareStartTrack(guildId, track, startMs = 0, options = {}) {
-  if (String(track?.source || "").toLowerCase() === "audius" && track?.url) {
-    try {
-      return await playAudius(this, guildId, track, startMs, options);
-    } catch (error) {
-      console.warn("⚠️ Audius playback failed; falling back to existing source engine: " + (error?.message || error));
+  try {
+    const tracks = await audiusSearch(q, requester);
+    if (tracks.length) {
+      const track = tracks[0];
+      SEARCH_CACHE.set(key, { at: Date.now(), track });
+      console.log("🎵 AUDIUS FALLBACK SEARCH: \"" + q + "\" -> \"" + track.title + "\" by \"" + track.author + "\"");
+      return { type: "track", tracks: [track] };
     }
+  } catch (error) {
+    console.warn("⚠️ Audius search failed for \"" + q + "\": " + (error?.message || error));
   }
-  return previousStartTrack.call(this, guildId, track, startMs, options);
+
+  return previousSearch.call(this, q, requester, options);
 };
 
-console.log("🎧 DEATH Audius recovery loaded: non-YouTube search + direct stream playback for Railway.");
