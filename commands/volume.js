@@ -3,19 +3,17 @@ const { SlashCommandBuilder } = require("discord.js");
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("volume")
-    .setDescription("Set DEATH Music volume.")
+    .setDescription("Set Spotify playback volume.")
     .addIntegerOption(option =>
-      option
-        .setName("level")
+      option.setName("level")
         .setDescription("1-100")
         .setMinValue(1)
         .setMaxValue(100)
         .setRequired(true)
     ),
-
-  async execute(interaction, { music }) {
+  async execute(interaction) {
     const level = interaction.options.getInteger("level", true);
-    const volume = await music.setVolume(interaction.guildId, level);
-    return interaction.reply(`🔊 Volume set to **${volume}%**.`);
+    await interaction.client.spotify.volume(interaction.guildId, interaction.user.id, level);
+    return interaction.reply(`🔊 Spotify volume set to **${level}%**.`);
   }
 };
