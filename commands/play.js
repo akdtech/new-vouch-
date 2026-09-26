@@ -8,7 +8,9 @@ module.exports = {
   async execute(interaction, { music }) {
     if (!interaction.guildId) return interaction.reply({ content: "Server only.", ephemeral: true });
     const query = interaction.options.getString("query", true).trim();
-    await interaction.deferReply();
+    // Acknowledge immediately so Discord does not show "GMAO Music is thinking..."
+    // while YouTube search and stream resolution are happening.
+    await interaction.reply("🎵 **DEATH Music** — finding your song…");
     try {
       const result = await music.play({
         guildId: interaction.guildId,
