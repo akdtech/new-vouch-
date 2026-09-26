@@ -17,7 +17,7 @@ const config = require("./config/config");
 const MusicManager = require("./music/DirectMusicManager");
 const SpotifyController = require("./spotify/SpotifyController");
 
-console.log("🧹 Clean music system boot: Spotify Connect mode.");
+console.log("🧹 DEATH Music boot: Discord Voice 24/7 mode.");
 
 if (!config.token || !config.clientId) {
   console.error("❌ Missing DISCORD_TOKEN or CLIENT_ID.");
@@ -97,7 +97,7 @@ client.once(Events.ClientReady, async readyClient => {
   console.log("");
   console.log("════════════════════════════════");
   console.log(`✅ ${readyClient.user.tag} is ONLINE`);
-  console.log("🎧 DEATH Music — Spotify Connect");
+  console.log("🎧 DEATH Music — Discord Voice 24/7");
   console.log("🎮 GMAO Gaming Community");
   console.log("════════════════════════════════");
 
@@ -125,12 +125,6 @@ client.once(Events.ClientReady, async readyClient => {
   }
 
   try {
-    await client.spotify.init();
-  } catch (error) {
-    console.error("Spotify init failed:", error?.message || error);
-  }
-
-  try {
     const panelChannel = resolveMusicPanelChannel(config.guildId);
     if (panelChannel) {
       console.log(`🎨 Music panel channel resolved: #${panelChannel.name} (${panelChannel.id})`);
@@ -138,8 +132,8 @@ client.once(Events.ClientReady, async readyClient => {
       console.warn("⚠️ No writable music text channel found. The panel will be created when a music command is used in a suitable channel.");
     }
 
-    console.log("🎧 Spotify Connect mode active — playback is controlled on the linked Spotify device.");
-    console.log("ℹ️ Discord voice is not used for Spotify Connect playback.");
+    console.log("🎧 Discord voice music engine active.");
+    console.log("♾️ 24/7 voice recovery + same-artist/genre autoplay active.");
   } catch (error) {
     console.error("❌ 24/7 music startup failed:", error?.message || error);
   }
@@ -242,49 +236,49 @@ client.on(Events.InteractionCreate, async interaction => {
     try {
       switch (interaction.customId) {
         case "death_music_pause":
-          await client.spotify.pause(guildId, interaction.user.id);
+          await music.pause(guildId);
           break;
         case "death_music_resume":
-          await client.spotify.resume(guildId, interaction.user.id);
+          await music.resume(guildId);
           break;
         case "death_music_skip":
-          await client.spotify.next(guildId, interaction.user.id);
+          await music.skip(guildId);
           break;
         case "death_music_stop":
-          await client.spotify.pause(guildId, interaction.user.id);
+          await music.stop(guildId);
           break;
         case "death_music_shuffle":
-          await client.spotify.shuffle(guildId, interaction.user.id, true);
+          await music.shuffle(guildId);
           break;
         case "death_music_loop": {
-          const status = await client.spotify.status(guildId, interaction.user.id);
-          const current = status.playback?.repeat_state || "off";
-          const next = current === "off" ? "track" : current === "track" ? "context" : "off";
-          await client.spotify.repeat(guildId, interaction.user.id, next);
+          const state = music.getState(guildId);
+          const next = state.loop === "none" ? "track" : state.loop === "track" ? "queue" : "none";
+          await music.setLoop(guildId, next);
           break;
         }
         case "death_music_vol_down": {
-          const status = await client.spotify.status(guildId, interaction.user.id);
-          const current = Number(status.playback?.device?.volume_percent ?? 70);
-          await client.spotify.volume(guildId, interaction.user.id, Math.max(1, current - 10));
+          const state = music.getState(guildId);
+          await music.setVolume(guildId, Math.max(1, Number(state.volume || 70) - 10));
           break;
         }
         case "death_music_vol_up": {
-          const status = await client.spotify.status(guildId, interaction.user.id);
-          const current = Number(status.playback?.device?.volume_percent ?? 70);
-          await client.spotify.volume(guildId, interaction.user.id, Math.min(100, current + 10));
+          const state = music.getState(guildId);
+          await music.setVolume(guildId, Math.min(100, Number(state.volume || 70) + 10));
           break;
         }
         case "death_music_autoplay": {
-          throw new Error("Spotify Connect autoplay is controlled by your Spotify app/queue.");
+          const state = music.getState(guildId);
+          state.autoplay = !state.autoplay;
+          state.autoplayGeneration = (state.autoplayGeneration || 0) + 1;
+          if (state.autoplay) await music.autoplayNext(guildId).catch(() => {});
+          break;
         }
         case "death_music_queue": {
-          const status = await client.spotify.status(guildId, interaction.user.id);
-          const current = status.playback?.item;
+          const tracks = music.getQueue(guildId);
           return await interaction.editReply({
-            content: current
-              ? `🎧 **Spotify:** ${current.name} — ${(current.artists || []).map(a => a.name).join(", ")}`
-              : "🎧 Nothing is currently playing on Spotify."
+            content: tracks.length
+              ? "🎵 **DEATH Music Queue**\n" + tracks.slice(0, 15).map((t, n) => `${n + 1}. ${t.title} — ${t.author}`).join("\n")
+              : "🎵 Nothing is queued."
           });
         }
         case "death_music_refresh":
@@ -325,7 +319,7 @@ const healthServer = http.createServer(async (req, res) => {
       const u = new URL(req.url, "http://localhost");
       await client.spotify.callback(u.searchParams.get("code"), u.searchParams.get("state"));
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-      return res.end("Spotify connected. Return to Discord and use /play.");
+      return res.end("Spotify callback available for the optional Spotify integration. Use /play for Discord voice music.");
     } catch (error) {
       res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
       return res.end("Spotify connection failed: " + String(error?.message || error));
@@ -335,7 +329,7 @@ const healthServer = http.createServer(async (req, res) => {
   res.end(JSON.stringify({
     status: "online",
     bot: client.user ? client.user.tag : "starting",
-    musicEngine: "spotify-connect",
+    musicEngine: "discord-voice-24-7",
     uptime: process.uptime(),
     timestamp: new Date().toISOString()
   }));
