@@ -135,8 +135,7 @@ client.once(Events.ClientReady, async readyClient => {
       console.warn("⚠️ No writable music text channel found. The panel will be created when a music command is used in a suitable channel.");
     }
 
-    music.startRecoveryLoop();
-    await music.ensure247(config.guildId);
+    console.log("Spotify mode: no voice startup.");
     console.log("♾️ Permanent GMAO Music direct-voice connection requested.");
   } catch (error) {
     console.error("❌ 24/7 music startup failed:", error?.message || error);
