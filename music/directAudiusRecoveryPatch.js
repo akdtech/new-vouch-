@@ -223,7 +223,7 @@ async function youtubeSearch(query, requester) {
     const entries = Array.isArray(data?.entries) ? data.entries : [];
     const norm = normalizeKey(q);
     const tokens = norm.split(" ").filter(Boolean);
-    const bad = /\b(playlist|mix|compilation|full album|album mix|nonstop|continuous|radio|medley|meg[a\s-]?mix|hour mix|karaoke|reaction|review|sped up|slowed|nightcore|8d|remix)\b/i;
+    const bad = /\b(playlist|mix|compilation|full album|album mix|nonstop|continuous|radio|medley|meg[a\s-]?mix|hour mix|karaoke|reaction|review|sped up|slowed|nightcore|8d|remix|top hits|trending music|best songs|viral hits|updated weekly|spotify.*hits)\b/i;
     const scored = entries.filter(x => x?.id && x?.title && !bad.test(x.title)).map(x => {
       const title = normalizeKey(x.title);
       const channel = normalizeKey(x.channel || x.uploader || "");
@@ -256,6 +256,13 @@ MusicManager.prototype.search = async function accurateMusicSearch(query, reques
   const q = typeof query === "string" ? this.cleanQuery(query) : this.cleanQuery(query?.query || query?.search || query?.name);
   if (!q) throw new Error("Please provide a song name or URL.");
 
+  // Autoplay discovery asks for multiple candidates; let the dedicated
+  // autoplay/search recovery system handle that instead of selecting one
+  // broad YouTube compilation as a "song".
+  if (options?.returnAll) {
+    return previousSearch.call(this, q, requester, options);
+  }
+
   if ((q.startsWith("http://") || q.startsWith("https://")) && !q.includes("youtube.com") && !q.includes("youtu.be")) {
     return previousSearch.call(this, q, requester, options);
   }
@@ -273,7 +280,9 @@ MusicManager.prototype.search = async function accurateMusicSearch(query, reques
     const yt = await youtubeSearch(q, requester);
     if (yt.length) {
       const track = yt[0];
-      SEARCH_CACHE.set(key, { at: Date.now(), track });
+      if (!/\b(playlist|mix|compilation|full album|album mix|nonstop|continuous|radio|medley|top hits|trending music|best songs|viral hits|updated weekly)\b/i.test(track.title)) {
+        SEARCH_CACHE.set(key, { at: Date.now(), track });
+      }
       console.log("🎯 ACCURATE YOUTUBE SEARCH: \"" + q + "\" -> \"" + track.title + "\" by \"" + track.author + "\"");
       return { type: "track", tracks: [track] };
     }
