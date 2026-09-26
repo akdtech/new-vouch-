@@ -927,6 +927,76 @@ function install() {
         return false;
       }
       const ctx = state.autoplayContext || {};
+
+      // Startup/skip autoplay should never search phrases like "top songs",
+      // because those frequently return compilations. Use Audius' individual
+      // trending tracks when there is no artist context, and use the current
+      // artist when there is one.
+      if (!clean(ctx.artist)) {
+        const trending = await audiusTrendingFallback(this.client.user);
+        const recent = new Set(Array.isArray(state.recent) ? state.recent : []);
+        const chosen = trending.find(t =>
+          t?.url &&
+          Number(t.length || 0) >= 60 * 1000 &&
+          Number(t.length || 0) <= 8 * 60 * 1000 &&
+          !recent.has(idOf(t))
+        );
+        if (chosen) {
+          chosen.isAutoplay = true;
+          chosen.autoplayGroup = "Trending music";
+          await this.startTrack(guildId, chosen, 0, { handoff: false });
+          const id = idOf(chosen);
+          state.recent = id ? [...state.recent, id].slice(-20) : state.recent;
+          state.autoplayBlockedUntil = 0;
+          state.transitioning = false;
+          state.autoplayContext = {
+            artist: clean(chosen.author),
+            title: clean(chosen.title),
+            query: clean(chosen.title),
+            words: clean(chosen.title).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
+          };
+          safeStatus(this, guildId, chosen, "Autoplay");
+          safePanel(this, guildId);
+          console.log(`🎯 FINAL AUTOPLAY: ${chosen.title} — ${chosen.author || "Unknown artist"} [Audius Trending]`);
+          return true;
+        }
+      } else {
+        try {
+          const mod = require("./directAudiusRecoveryPatch");
+          const related = typeof mod?.audiusSearch === "function"
+            ? await mod.audiusSearch(clean(ctx.artist + " similar songs"), this.client.user)
+            : [];
+          const recent = new Set(Array.isArray(state.recent) ? state.recent : []);
+          const chosen = related.find(t =>
+            t?.url &&
+            Number(t.length || 0) >= 60 * 1000 &&
+            Number(t.length || 0) <= 8 * 60 * 1000 &&
+            !recent.has(idOf(t))
+          );
+          if (chosen) {
+            chosen.isAutoplay = true;
+            chosen.autoplayGroup = `Related to ${ctx.artist}`;
+            await this.startTrack(guildId, chosen, 0, { handoff: false });
+            const id = idOf(chosen);
+            state.recent = id ? [...state.recent, id].slice(-20) : state.recent;
+            state.autoplayBlockedUntil = 0;
+            state.transitioning = false;
+            state.autoplayContext = {
+              artist: clean(chosen.author || ctx.artist),
+              title: clean(chosen.title),
+              query: clean(chosen.title),
+              words: clean(chosen.title).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
+            };
+            safeStatus(this, guildId, chosen, "Autoplay");
+            safePanel(this, guildId);
+            console.log(`🎯 FINAL AUTOPLAY: ${chosen.title} — ${chosen.author || "Unknown artist"} [Related]`);
+            return true;
+          }
+        } catch (error) {
+          console.warn(`⚠️ Related Audius autoplay failed: ${clean(error?.message || error).slice(-500)}`);
+        }
+      }
+
       const seeds = [];
       if (clean(ctx.artist)) {
         seeds.push(`${ctx.artist} songs official audio`);
