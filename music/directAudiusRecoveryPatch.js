@@ -256,7 +256,7 @@ MusicManager.prototype.search = async function accurateMusicSearch(query, reques
   const q = typeof query === "string" ? this.cleanQuery(query) : this.cleanQuery(query?.query || query?.search || query?.name);
   if (!q) throw new Error("Please provide a song name or URL.");
 
-  if (/^https?:\\/\\//i.test(q) && !/youtube\\.com|youtu\\.be/i.test(q)) {
+  if ((q.startsWith("http://") || q.startsWith("https://")) && !q.includes("youtube.com") && !q.includes("youtu.be")) {
     return previousSearch.call(this, q, requester, options);
   }
 
