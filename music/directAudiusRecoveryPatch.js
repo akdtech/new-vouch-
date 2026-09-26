@@ -221,6 +221,128 @@ MusicManager.prototype.search = async function audiusFirstSearch(query, requeste
   return previousSearch.call(this, q, requester, options);
 };
 
+async function audiusTrending(requester) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const url = new URL(AUDIUS_API + "/tracks/trending");
+    url.searchParams.set("time", "week");
+    url.searchParams.set("limit", "100");
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { accept: "application/json", "user-agent": "DEATH-GMAO-Music/6.0" }
+    });
+    if (!response.ok) throw new Error("Audius trending HTTP " + response.status);
+    const json = await response.json();
+    const items = Array.isArray(json?.data) ? json.data : [];
+    return items
+      .filter(x => x?.id && x?.title)
+      .map(x => ({
+        identifier: String(x.id),
+        id: String(x.id),
+        url: AUDIUS_API + "/tracks/" + encodeURIComponent(x.id) + "/stream",
+        title: clean(x.title),
+        author: clean(x.user?.name || x.user?.handle || "Unknown artist"),
+        length: Number(x.duration || 0) * 1000,
+        genre: x.genre || x.tags?.genre || null,
+        requester: requester || null,
+        thumbnail: x.artwork?.["480x480"] || x.artwork?.["150x150"] || null,
+        source: "audius"
+      }))
+      .filter(t => Number(t.length || 0) >= 60 * 1000 && Number(t.length || 0) <= 8 * 60 * 1000)
+      .filter(t => !badTitle.test(t.title));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const previousAutoplayNext = MusicManager.prototype.autoplayNext;
+
+MusicManager.prototype.autoplayNext = async function audiusAutoplayNext(guildId) {
+  const state = this.getState(guildId);
+  const player = this.players.get(guildId) || this.ensurePlayer(guildId);
+  if (!state.autoplay || state.intentionalLeave || state.autoplayBusy) return false;
+  if (state.current || state.queue.length) return false;
+  if (Number(state.autoplayBlockedUntil || 0) > Date.now()) return false;
+
+  state.autoplayBusy = true;
+  state.transitioning = true;
+  try {
+    const ctx = state.autoplayContext || {};
+    const recent = new Set(Array.isArray(state.recent) ? state.recent : []);
+    let candidates = [];
+
+    // When we know the artist, search that artist first so Skip/end-of-track
+    // stays close to the current artist/genre instead of jumping randomly.
+    if (clean(ctx.artist || ctx.author)) {
+      const artist = clean(ctx.artist || ctx.author);
+      try { candidates.push(...await audiusSearch(artist, this.client.user)); } catch {}
+      if (clean(ctx.title)) {
+        try { candidates.push(...await audiusSearch(artist + " similar " + clean(ctx.title), this.client.user)); } catch {}
+      }
+    }
+
+    // Startup has no artist context, so use Audius' real trending endpoint
+    // instead of YouTube search phrases that are commonly playlists/mixes.
+    if (!candidates.length) {
+      try { candidates = await audiusTrending(this.client.user); } catch (error) {
+        console.warn("⚠️ Audius trending autoplay failed: " + (error?.message || error));
+      }
+    }
+
+    candidates = candidates
+      .filter(t => t?.source === "audius" && t?.url)
+      .filter(t => Number(t.length || 0) >= 60 * 1000 && Number(t.length || 0) <= 8 * 60 * 1000)
+      .filter(t => !badTitle.test(t.title))
+      .filter(t => !recent.has(idOf(t)));
+
+    if (clean(ctx.artist || ctx.author)) {
+      const artist = clean(ctx.artist || ctx.author).toLowerCase();
+      candidates.sort((a, b) => {
+        const aa = clean(a.author).toLowerCase().includes(artist) ? 1 : 0;
+        const bb = clean(b.author).toLowerCase().includes(artist) ? 1 : 0;
+        return bb - aa;
+      });
+    }
+
+    const chosen = candidates[0];
+    if (!chosen) {
+      state.transitioning = false;
+      state.autoplayBusy = false;
+      state.autoplayBlockedUntil = Date.now() + 10000;
+      console.warn("⚠️ Audius autoplay found no suitable track.");
+      return false;
+    }
+
+    chosen.isAutoplay = true;
+    chosen.autoplayGroup = clean(ctx.artist || ctx.author)
+      ? "Related to " + clean(ctx.artist || ctx.author)
+      : "Audius Trending";
+
+    await this.startTrack(guildId, chosen, 0, { handoff: false });
+    const id = idOf(chosen);
+    if (id) state.recent = [...state.recent, id].slice(-20);
+    state.autoplayContext = {
+      artist: clean(chosen.author),
+      title: clean(chosen.title),
+      query: clean(chosen.title),
+      words: clean(chosen.title).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
+    };
+    state.autoplayBlockedUntil = 0;
+    state.transitioning = false;
+    console.log("🎯 Audius autoplay started: " + chosen.title + " — " + chosen.author);
+    return true;
+  } catch (error) {
+    state.transitioning = false;
+    state.current = null;
+    state.autoplayBlockedUntil = Date.now() + 10000;
+    console.warn("⚠️ Audius autoplay recovery failed: " + (error?.message || error));
+    return false;
+  } finally {
+    state.autoplayBusy = false;
+  }
+};
+
 MusicManager.prototype.startTrack = async function audiusAwareStartTrack(guildId, track, startMs = 0, options = {}) {
   if (String(track?.source || "").toLowerCase() === "audius" && track?.url) {
     try {
