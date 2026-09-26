@@ -1,2 +1,8 @@
 const { SlashCommandBuilder } = require("discord.js");
-module.exports={data:new SlashCommandBuilder().setName("pause").setDescription("Pause Spotify playback."),async execute(i){await i.client.spotify.pause(i.guildId,i.user.id);return i.reply("⏸️ Spotify paused.");}};
+module.exports = {
+  data: new SlashCommandBuilder().setName("pause").setDescription("Pause Discord voice playback."),
+  async execute(i, { music }) {
+    await music.pause(i.guildId);
+    return i.reply("⏸️ Music paused in the Discord voice channel.");
+  }
+};
