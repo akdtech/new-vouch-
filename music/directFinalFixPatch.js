@@ -200,9 +200,11 @@ async function getInvidiousStream(id) {
 
 async function resolveYouTubeUrl(track) {
   const profiles = [
-    "mweb",
+    "tv",
+    "tv_embedded",
     "web_safari",
     "web_embedded",
+    "mweb",
     "android_vr"
   ];
   let lastError = null;
@@ -606,11 +608,12 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
 async function searchYt(manager, query, requester) {
   const q = manager.cleanQuery(query);
   const piped = String(process.env.PIPED_API_URLS || [
-    "https://pipedapi.ducks.party",
-    "https://api.piped.private.coffee",
+    "https://pipedapi.kavin.rocks",
     "https://pipedapi.leptons.xyz",
+    "https://pipedapi.nosebs.ru",
     "https://pipedapi.adminforge.de",
-    "https://pipedapi.darkness.services"
+    "https://pipedapi.darkness.services",
+    "https://api.piped.yt"
   ].join(",")).split(",").map(v => v.trim().replace(/\/+$/, "")).filter(Boolean);
   const invidious = INVIDIOUS.slice(0, 5);
 
@@ -669,7 +672,7 @@ async function searchYt(manager, query, requester) {
       "--flat-playlist",
       "--playlist-end", "5",
       "ytsearch5:" + q
-    ], 9000, "mweb");
+    ], 9000, "tv,web_safari");
   } catch (youtubeSearchError) {
     console.warn(`⚠️ YouTube search blocked; trying SoundCloud search: ${clean(youtubeSearchError?.message || youtubeSearchError).slice(-500)}`);
     const soundcloudTracks = await soundCloudSearch(q, requester);
@@ -708,7 +711,7 @@ function install() {
           "--dump-single-json",
           "--skip-download",
           q
-        ], SEARCH_TIMEOUT, "mweb");
+        ], SEARCH_TIMEOUT, "tv,web_safari");
         return { type: "track", tracks: [normalize(JSON.parse(result.stdout), requester, q)] };
       } catch {
         return {
