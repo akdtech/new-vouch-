@@ -318,7 +318,18 @@ client.on(Events.GuildMemberAdd, async member => {
 });
 
 const healthPort = Number(process.env.PORT || 3000);
-const healthServer = http.createServer((req, res) => {
+const healthServer = http.createServer(async (req, res) => {
+  if ((req.url || "").startsWith("/spotify/callback")) {
+    try {
+      const u = new URL(req.url, "http://localhost");
+      await client.spotify.callback(u.searchParams.get("code"), u.searchParams.get("state"));
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      return res.end("Spotify connected. Return to Discord and use /play.");
+    } catch (error) {
+      res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+      return res.end("Spotify connection failed: " + String(error?.message || error));
+    }
+  }
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
     status: "online",
