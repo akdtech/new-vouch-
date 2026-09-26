@@ -5,9 +5,9 @@ ENV YTDLP_PATH=/usr/local/bin/yt-dlp
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 ENV YTDLP_POT_PROVIDER_URL=http://bgutil-pot.railway.internal:4416
 
-# Direct music engine: FFmpeg + Chromium + Deno for current YouTube extraction.
-# WebPoClient is installed as a browser-backed PO-token provider because the
-# Railway IP is currently receiving YouTube bot checks even with BgUtils.
+# Direct music engine: FFmpeg + Chromium + Deno for current extraction.
+# Audius is also enabled as the non-YouTube playback path because Railway's
+# datacenter egress is currently receiving YouTube bot challenges.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg chromium curl ca-certificates python3 python3-pip unzip \
     && python3 -m pip install --no-cache-dir --break-system-packages -U "yt-dlp[default]" bgutil-ytdlp-pot-provider==2.0.0 yt-dlp-getpot-wpc \
@@ -32,4 +32,4 @@ COPY . .
 
 EXPOSE 3000
 
-CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directPipedPlaybackPatch.js", "-r", "./music/directInvidiousFallbackPatch.js", "-r", "./music/directPipedSearchPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directLiveStatePatch.js", "-r", "./music/directPlaylistPatch.js", "index-direct.js"]
+CMD ["node", "-r", "./music/directCompatibilityPatch.js", "-r", "./music/directAutoplayPatch.js", "-r", "./music/directPlaybackPatch.js", "-r", "./music/directPipedPlaybackPatch.js", "-r", "./music/directInvidiousFallbackPatch.js", "-r", "./music/directPipedSearchPatch.js", "-r", "./music/directControlsPatch.js", "-r", "./music/directPanelPatch.js", "-r", "./music/directSyncPatch.js", "-r", "./music/directLiveStatePatch.js", "-r", "./music/directPlaylistPatch.js", "-r", "./music/directAudiusRecoveryPatch.js", "index-direct.js"]
