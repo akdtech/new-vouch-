@@ -1,6 +1,7 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
+const { PassThrough } = require("node:stream");
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -534,6 +535,8 @@ class DirectMusicManager {
           this.ensure247(guild.id).catch(error => console.error("❌ Direct music startup:", error?.message || error));
         }
       }
+      this.startRecoveryLoop();
+      }
     });
   }
 
@@ -635,6 +638,7 @@ class DirectMusicManager {
   async play({ guildId, voiceId, query, requester }) {
     const clean = this.cleanQuery(query);
     if (!clean) throw new Error("Please provide a song name or URL.");
+
     const destinationVoice = guildId === this.musicGuildId ? this.musicVoiceChannelId : voiceId;
     if (!destinationVoice) throw new Error("No voice channel is available.");
 
@@ -648,8 +652,6 @@ class DirectMusicManager {
 
     state.manualGeneration++;
     track.isAutoplay = false;
-    // Autoplay follows the last song the user searched for: prefer the same
-    // artist first, then the same genre. This prevents random 1-hour mixes.
     state.autoplayContext = {
       title: track.title,
       author: track.author,
@@ -657,67 +659,119 @@ class DirectMusicManager {
       id: this.getTrackId(track)
     };
 
-    const playerBusy = player.state.status === AudioPlayerStatus.Playing || player.state.status === AudioPlayerStatus.Paused || Boolean(state.transitioning);
-    if (state.current?.isAutoplay && playerBusy) {
-      // Manual /play always wins over autoplay, but uses the same atomic handoff.
-      await this.startTrack(guildId, track, 0, { handoff: true });
-      return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: true, queued: false };
+    // A manual /play is an immediate handoff. Do not wait behind an autoplay
+    // track or an old queue entry; the requested song becomes the new source.
+    state.queue = [];
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
     }
+    await this.startTrack(guildId, track, 0, { handoff: true });
 
-    // If Discord is idle, never let stale state.current block a new play.
-    if (!playerBusy && player.state.status === AudioPlayerStatus.Idle) {
-      await this.startTrack(guildId, track, 0, { handoff: true });
-      return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: true, queued: false };
-    }
-    state.queue.push(track);
-    await this.refreshPanel(guildId).catch(() => {});
-    return { type: "track", tracks: [track], track, player: this.getPlayer(guildId), startedNow: false, queued: true };
+    return {
+      type: "track",
+      tracks: [track],
+      track,
+      player: this.getPlayer(guildId),
+      startedNow: true,
+      queued: false
+    };
   }
 
-  async startTrack(guildId, track, startMs = 0) {
+  async startTrack(guildId, track, startMs = 0, options = {}) {
     const state = this.getState(guildId);
     const player = this.players.get(guildId) || this.ensurePlayer(guildId);
+    const oldStream = this.streams.get(guildId);
+    const oldCurrent = state.current;
 
-    this.destroyStream(guildId);
-    state.current = track;
-    state.startedAt = Date.now();
-    state.positionOffset = Math.max(0, Number(startMs || 0));
-    state.paused = false;
+    state.playbackToken = Number(state.playbackToken || 0) + 1;
+    const token = state.playbackToken;
+    state.transitioning = true;
 
-    // Clean engine: FFmpeg reads the source directly. No Lavalink,
-    // no Kazagumo, no YouTube extractor and no proxy chain.
     const ff = spawn(FFMPEG, [
-      "-hide_banner", "-loglevel", "error",
+      "-hide_banner", "-loglevel", "error", "-nostdin",
       "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
       "-i", track.url,
       ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-      "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
+      "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
     ], { stdio: ["ignore", "pipe", "pipe"] });
-
-    this.streams.set(guildId, { ff });
 
     let stderr = "";
     ff.stderr.on("data", chunk => {
       stderr += chunk.toString();
-      if (stderr.length > 2500) stderr = stderr.slice(-2500);
-    });
-    ff.on("error", error => console.warn("⚠️ FFmpeg error:", error?.message || error));
-    ff.on("close", code => {
-      if (code !== 0 && state.current === track) {
-        console.warn("⚠️ FFmpeg source ended:", code, stderr.trim().split("\\n").slice(-2).join(" "));
-      }
+      if (stderr.length > 5000) stderr = stderr.slice(-5000);
     });
 
-    const resource = createAudioResource(ff.stdout, {
+    const waitForAudio = await new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { ff.kill("SIGKILL"); } catch {}
+        reject(new Error("Audio source produced no Discord audio within 20 seconds."));
+      }, 20000);
+
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+
+      ff.stdout.once("data", chunk => {
+        if (!chunk?.length) return finish(reject, new Error("Audio source returned empty audio."));
+        finish(resolve, chunk);
+      });
+      ff.once("error", error => finish(reject, error));
+      ff.once("close", code => {
+        if (code !== 0) finish(reject, new Error(`FFmpeg exited ${code}: ${String(stderr).trim().slice(-700)}`));
+      });
+    }).catch(error => {
+      try { ff.kill("SIGKILL"); } catch {}
+      state.transitioning = false;
+      if (state.current === oldCurrent || !oldCurrent) state.current = oldCurrent || null;
+      throw error;
+    });
+
+    if (state.playbackToken !== token) {
+      try { ff.kill("SIGKILL"); } catch {}
+      state.transitioning = false;
+      throw new Error("Playback attempt superseded.");
+    }
+
+    const pcm = new PassThrough({ highWaterMark: 1024 * 1024 });
+    const resource = createAudioResource(pcm, {
       inputType: StreamType.Raw,
       inlineVolume: true,
       metadata: track
     });
     resource.volume?.setVolume(Math.max(0.01, state.volume / 100));
+
+    state.current = track;
+    state.startedAt = Date.now();
+    state.positionOffset = Math.max(0, Number(startMs || 0));
+    state.paused = false;
+    state.audioResource = resource;
+    state.transitioning = false;
+    this.streams.set(guildId, { ff, pcm, resource, source: track.source || "direct" });
+
+    // Prime the resource with verified PCM before replacing the current Discord
+    // audio resource. This prevents the old "panel says Playing but VC is
+    // silent" race when a source fails during startup.
+    pcm.write(waitForAudio);
+    ff.stdout.pipe(pcm);
     player.play(resource);
 
+    if (oldStream && oldStream !== this.streams.get(guildId)) {
+      try { oldStream.yt?.stdout?.unpipe?.(oldStream.ff?.stdin); } catch {}
+      try { oldStream.yt?.kill("SIGKILL"); } catch {}
+      try { oldStream.ff?.kill("SIGKILL"); } catch {}
+      try { oldStream.pcm?.destroy?.(); } catch {}
+    }
+
     await this.refreshPanel(guildId).catch(() => {});
-    console.log("▶️ CLEAN PLAYBACK STARTED:", track.title, "[" + track.source + "]");
+    console.log("▶️ DISCORD VC PLAYBACK STARTED:", track.title, "[" + (track.source || "direct") + "]");
+    return true;
   }
 
   destroyStream(guildId) {
