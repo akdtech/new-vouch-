@@ -15,7 +15,7 @@ module.exports = {
     const sub = interaction.options.getSubcommand();
 
     if (sub === "connect") {
-      const url = spotify.authUrl(interaction.user.id, interaction.guildId);
+      const url = interaction.client.spotify.authUrl(interaction.user.id, interaction.guildId);
       return interaction.reply({
         content: \`🎧 **Connect Spotify Premium**\n\n[Authorize Spotify](\${url})\n\nAfter authorizing, return to Discord and use **/play**. Playback stays inside Spotify on your active Spotify Connect device — the Discord bot does not stream Spotify audio into the voice channel.\`,
         ephemeral: true
