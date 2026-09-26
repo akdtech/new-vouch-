@@ -34,7 +34,7 @@ try {
 const cookieArgs = () => { try { return fs.existsSync(COOKIE_FILE) ? ["--cookies", COOKIE_FILE] : []; } catch { return []; } };
 const SEARCH_TIMEOUT = 12000;
 const RESOLVE_TIMEOUT = 14000;
-const PCM_TIMEOUT = 15000;
+const PCM_TIMEOUT = 60000;
 const RECONNECT_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36";
 const INVIDIOUS = String(process.env.INVIDIOUS_API_URLS || [
   "https://inv.nadeko.net",
@@ -737,6 +737,8 @@ function install() {
     state.intentionalLeave = false;
     state.autoplay = true;
     state.manualGeneration = Number(state.manualGeneration || 0) + 1;
+    // Cancel any in-flight autoplay decision before resolving the new search.
+    state.autoplayBlockedUntil = Date.now() + 5000;
 
     const destination = guildId === this.musicGuildId
       ? this.musicVoiceChannelId
@@ -784,6 +786,9 @@ function install() {
   };
 
   MusicManager.prototype.autoplayNext = async function finalAutoplayNext(guildId) {
+    // A manual /play request owns the guild until it finishes. Capture the
+    // generation so an older autoplay job cannot supersede a fresh search.
+    const manualGenerationAtStart = Number(this.getState(guildId).manualGeneration || 0);
     const state = this.getState(guildId);
     const player = this.players.get(guildId) || this.ensurePlayer(guildId);
 
@@ -795,6 +800,10 @@ function install() {
     state.transitioning = true;
 
     try {
+      if (Number(state.manualGeneration || 0) !== manualGenerationAtStart) {
+        state.transitioning = false;
+        return false;
+      }
       const ctx = state.autoplayContext || {};
       const seeds = [];
       if (clean(ctx.artist)) {
@@ -826,6 +835,10 @@ function install() {
 
       let lastError = null;
       for (const chosen of candidates.slice(0, 6)) {
+        if (Number(state.manualGeneration || 0) !== manualGenerationAtStart) {
+          state.transitioning = false;
+          return false;
+        }
         chosen.isAutoplay = true;
         chosen.autoplayGroup = clean(ctx.artist) ? `Related to ${ctx.artist}` : "Popular music";
         try {
