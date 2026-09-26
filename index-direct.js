@@ -189,6 +189,43 @@ client.on(Events.MessageCreate, message => {
     }
   }, 250);
 });
+const MUSIC_ACTION_JOKES = [
+  "🎧 **{user}** just used **{action}** — the DJ has been notified. Please remain calm. 😂",
+  "🤣 **{user}** hit **{action}** — bro really said 'let DEATH handle the music.'",
+  "🎵 **{user}** used **{action}** — certified DJ behavior detected.",
+  "🚨 **{user}** used **{action}** — the music department is now pretending this was planned.",
+  "🫡 **{user}** called **{action}** — DEATH Music is on the case. No refunds.",
+  "🔥 **{user}** used **{action}** — somebody give this person the aux already.",
+  "💀 **{user}** pressed **{action}** — the song has been summoned.",
+  "🎶 **{user}** used **{action}** — Spotify lawyers have been notified. (Probably.)"
+];
+
+async function announceMusicAction(interaction, action) {
+  if (!interaction?.guildId) return;
+
+  let channel = null;
+  if (interaction.channel?.isTextBased?.() && typeof interaction.channel.send === "function") {
+    channel = interaction.channel;
+  } else {
+    channel = resolveMusicPanelChannel(interaction.guildId, interaction.channelId);
+  }
+
+  if (!channel || typeof channel.send !== "function") return;
+
+  const joke = MUSIC_ACTION_JOKES[Math.floor(Math.random() * MUSIC_ACTION_JOKES.length)]
+    .replace("{user}", `<@${interaction.user.id}>`)
+    .replace("{action}", action);
+
+  try {
+    await channel.send({
+      content: joke,
+      allowedMentions: { users: [] }
+    });
+  } catch (error) {
+    console.warn("⚠️ Music action announcement failed:", error?.message || error);
+  }
+}
+
 client.on(Events.InteractionCreate, async interaction => {
   if (interaction.isChatInputCommand()) {
     const command = client.commands.get(interaction.commandName);
@@ -197,6 +234,10 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.guildId === config.guildId) {
       resolveMusicPanelChannel(interaction.guildId, interaction.channelId);
     }
+
+    // Visible activity log: show who used each music slash command without
+    // changing the command actual behavior or response.
+    announceMusicAction(interaction, "/" + interaction.commandName).catch(() => {});
 
     try {
       await command.execute(interaction, { client, music, config, kazagumo: null });
@@ -241,6 +282,25 @@ client.on(Events.InteractionCreate, async interaction => {
       if (error?.code !== 10008) console.warn("⚠️ Music button acknowledgement failed:", error?.message || error);
       return;
     }
+
+    // Also log panel controls so we can see who pressed Skip/Pause/Play/etc.
+    const buttonActionNames = {
+      death_music_pause: "Pause",
+      death_music_resume: "Play",
+      death_music_skip: "Skip",
+      death_music_stop: "Stop",
+      death_music_shuffle: "Shuffle",
+      death_music_loop: "Loop",
+      death_music_vol_down: "Volume −",
+      death_music_vol_up: "Volume +",
+      death_music_autoplay: "Autoplay",
+      death_music_queue: "Queue",
+      death_music_refresh: "Refresh"
+    };
+    announceMusicAction(
+      interaction,
+      buttonActionNames[interaction.customId] || interaction.customId.replace(/^death_music_/, "")
+    ).catch(() => {});
 
     try {
       switch (interaction.customId) {
