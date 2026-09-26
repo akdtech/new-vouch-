@@ -15,6 +15,7 @@ const path = require("path");
 
 const config = require("./config/config");
 const MusicManager = require("./music/DirectMusicManager");
+const SpotifyController = require("./spotify/SpotifyController");
 
 console.log("🧹 Clean music system boot: Spotify Connect mode.");
 
