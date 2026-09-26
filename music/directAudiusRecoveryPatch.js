@@ -14,7 +14,7 @@ const MusicManager = require("./DirectMusicManager");
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
 const AUDIUS_API = String(process.env.AUDIUS_API_URL || "https://api.audius.co/v1").replace(/\/+$/, "");
 const SEARCH_TIMEOUT_MS = 9000;
-const PCM_TIMEOUT_MS = 15000;
+const PCM_TIMEOUT_MS = 9000;
 
 const clean = v => String(v || "").replace(/\s+/g, " ").trim();
 const idOf = t => t?.identifier || t?.id || t?.url || null;
@@ -111,7 +111,7 @@ async function playAudius(manager, guildId, track, startMs = 0, options = {}) {
     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
     "-i", track.url,
     ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-    "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
+    "-vn", "-af", "aresample=48000:async=1:first_pts=0", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   let stderr = "";
