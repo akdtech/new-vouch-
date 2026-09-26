@@ -476,7 +476,7 @@ async function startSoundCloud(manager, guildId, track, startMs, token, handoff)
         "-hide_banner", "-loglevel", "error", "-nostdin",
         "-i", "pipe:0",
         ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-        "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
+        "-vn", "-af", "aresample=48000:async=1:first_pts=0", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
       ], { stdio: ["pipe", "pipe", "pipe"] });
 
       const first = await waitForPcm(ff, 9000);
@@ -598,7 +598,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   if (sourceHeaders) ffArgs.push("-headers", sourceHeaders);
   ffArgs.push("-i", sourceUrl,
   ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-  "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
+  "-vn", "-af", "aresample=48000:async=1:first_pts=0", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
   );
   const ff = spawn(FFMPEG, ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
