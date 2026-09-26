@@ -491,8 +491,17 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
   let sourceHeaders = "";
   let sourceName = "youtube";
 
-  // Piped is attempted first because it can hand us a server-side audio URL
-  // without exposing the Railway IP to YouTube's normal yt-dlp download path.
+  // Use the normal YouTube -> yt-dlp -> FFmpeg path first. This is the
+  // same basic architecture as the working Discord music bot shown by the
+  // user: resolve a YouTube result and stream its audio into Discord VC.
+  try {
+    await startYtDlpPipe(manager, guildId, track, startMs, token, handoff);
+    return true;
+  } catch (error) {
+    console.warn(`⚠️ YouTube direct playback failed; trying proxy recovery for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-700)}`);
+  }
+
+  // Proxy sources are recovery routes only.
   if (typeof getPipedStream === "function") {
     try {
       const piped = await getPipedStream(idOf(track));
@@ -685,25 +694,90 @@ function install() {
 
   const originalSearch = MusicManager.prototype.search;
   MusicManager.prototype.search = async function finalSearch(query, requester) {
-    const q = typeof query === "string" ? this.cleanQuery(query) : this.cleanQuery(query?.query || query?.search || query?.name);
+    const q = typeof query === "string"
+      ? this.cleanQuery(query)
+      : this.cleanQuery(query?.query || query?.search || query?.name);
     if (!q) throw new Error("Please provide a song name or URL.");
 
-    // Keep the existing fast Invidious search if it is healthy.
-    if (!this.isYouTubeUrl(q)) {
-      return searchYt(this, q, requester);
+    if (this.isYouTubeUrl(q)) {
+      try {
+        const result = await runYtDlp([
+          "--dump-single-json",
+          "--skip-download",
+          q
+        ], SEARCH_TIMEOUT, "mweb");
+        return { type: "track", tracks: [normalize(JSON.parse(result.stdout), requester, q)] };
+      } catch {
+        return {
+          type: "track",
+          tracks: [normalize({
+            id: q.match(/[?&]v=([A-Za-z0-9_-]{11})/)?.[1],
+            title: q,
+            uploader: "YouTube"
+          }, requester, q)]
+        };
+      }
     }
 
+    // YouTube is the primary search source. This gives /play the same
+    // behaviour users expect from a normal Discord YouTube music bot:
+    // resolve the actual YouTube result, then immediately stream that result
+    // into the Discord voice connection.
     try {
       const result = await runYtDlp([
         "--dump-single-json",
-        "--skip-download",
-        q
+        "--flat-playlist",
+        "--playlist-end", "10",
+        "ytsearch10:" + q
       ], SEARCH_TIMEOUT, "mweb");
-      return { type: "track", tracks: [normalize(JSON.parse(result.stdout), requester, q)] };
+
+      let data;
+      try { data = JSON.parse(result.stdout || "{}"); }
+      catch {
+        const lines = String(result.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+        data = lines.length ? JSON.parse(lines.at(-1)) : null;
+      }
+
+      const entries = Array.isArray(data?.entries) ? data.entries : [];
+      const norm = value => String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const queryNorm = norm(q);
+      const queryWords = queryNorm.split(" ").filter(w => w.length >= 2);
+      const bad = /\b(playlist|mix|compilation|full album|album mix|nonstop|continuous|hour mix|meg[a\s-]?mix|karaoke|reaction|review)\b/i;
+
+      const candidates = entries
+        .filter(x => x?.id && x?.title && !bad.test(x.title))
+        .map(x => {
+          const title = norm(x.title);
+          const uploader = norm(x.uploader || x.channel);
+          const titleWords = new Set(title.split(" ").filter(Boolean));
+          const matched = queryWords.filter(w => titleWords.has(w)).length;
+          let score = matched * 20;
+          if (title === queryNorm) score += 300;
+          if (title.includes(queryNorm)) score += 180;
+          if (queryWords.length && queryWords.every(w => titleWords.has(w))) score += 100;
+          if (uploader.includes("official") || uploader.includes("topic")) score += 15;
+          return { x, score };
+        })
+        .sort((a, b) => b.score - a.score);
+
+      if (candidates.length) {
+        const tracks = candidates.slice(0, 5).map(({x}) =>
+          normalize(x, requester, `https://www.youtube.com/watch?v=${x.id}`)
+        );
+        console.log(`🎯 YouTube-first search: "${q}" -> "${tracks[0].title}" by "${tracks[0].author}"`);
+        return { type: "track", tracks };
+      }
     } catch (error) {
-      // URL metadata is not required to start playback; keep the URL playable.
-      return { type: "track", tracks: [normalize({ id: q.match(/[?&]v=([A-Za-z0-9_-]{11})/)?.[1], title: q, uploader: "YouTube" }, requester, q)] };
+      console.warn(`⚠️ YouTube-first search failed for "${q}": ${clean(error?.message || error).slice(-700)}`);
     }
+
+    // Only use proxy search as a fallback when direct YouTube search is
+    // unavailable. The selected result is still played in Discord VC.
+    return searchYt(this, q, requester);
   };
 
   MusicManager.prototype.startTrack = async function finalStartTrack(guildId, track, startMs = 0, options = {}) {
