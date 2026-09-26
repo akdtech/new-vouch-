@@ -33,8 +33,8 @@ try {
 } catch {}
 const cookieArgs = () => { try { return fs.existsSync(COOKIE_FILE) ? ["--cookies", COOKIE_FILE] : []; } catch { return []; } };
 const SEARCH_TIMEOUT = 12000;
-const RESOLVE_TIMEOUT = 14000;
-const PCM_TIMEOUT = 60000;
+const RESOLVE_TIMEOUT = 4500;
+const PCM_TIMEOUT = 9000;
 const RECONNECT_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36";
 const INVIDIOUS = String(process.env.INVIDIOUS_API_URLS || [
   "https://inv.nadeko.net",
@@ -200,11 +200,8 @@ async function getInvidiousStream(id) {
 
 async function resolveYouTubeUrl(track) {
   const profiles = [
-    "tv",
-    "tv_embedded",
-    "web_safari",
-    "web_embedded",
     "mweb",
+    "web_safari",
     "android_vr"
   ];
   let lastError = null;
@@ -274,7 +271,7 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
     "-hide_banner", "-loglevel", "error", "-nostdin",
     "-i", "pipe:0",
     ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []),
-    "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
+    "-vn", "-af", "aresample=48000:async=1:first_pts=0", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"
   ], { stdio: ["pipe", "pipe", "pipe"] });
 
   const oldStream = manager.streams.get(guildId);
