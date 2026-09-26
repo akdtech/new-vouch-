@@ -26,7 +26,7 @@ try { ({ getPipedStream } = require("./directPipedPlaybackPatch")); } catch {}
 
 const YTDLP = process.env.YTDLP_PATH || "/usr/local/bin/yt-dlp";
 const FFMPEG = process.env.FFMPEG_PATH || "/usr/bin/ffmpeg";
-const POT = process.env.YTDLP_POT_PROVIDER_URL || "http://bgutil-pot.railway.internal:4416";
+const POT = String(process.env.YTDLP_POT_PROVIDER_URL || "").trim();
 const COOKIE_FILE = process.env.YOUTUBE_COOKIES_PATH || "/tmp/youtube-cookies.txt";
 try {
   if (process.env.YOUTUBE_COOKIES_B64) fs.writeFileSync(COOKIE_FILE, Buffer.from(process.env.YOUTUBE_COOKIES_B64, "base64"), { mode: 0o600 });
@@ -51,12 +51,14 @@ const idOf = t => t?.identifier || t?.id || t?.url || null;
 const kill = p => { try { p?.kill("SIGKILL"); } catch {} };
 
 function youtubeArgs(profile = "default,web_embedded") {
-  return [
+  const args = [
     "--extractor-args", `youtube:player_client=${profile};fetch_pot=always;use_ad_playback_context=false`,
-    "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
+    "--extractor-args", "youtubepot-wpc:browser_path=/usr/bin/chromium",
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno"
   ];
+  if (POT) args.splice(2, 0, "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`);
+  return args;
 }
 
 function runYtDlp(args, timeoutMs, profile = "default,web_embedded") {
@@ -257,7 +259,8 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
     "--retries", "1",
     "--fragment-retries", "1",
     "--extractor-args", "youtube:player_client=mweb;fetch_pot=always;use_ad_playback_context=false",
-    "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`,
+    "--extractor-args", "youtubepot-wpc:browser_path=/usr/bin/chromium",
+    ...(POT ? ["--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`] : []),
     "--remote-components", "ejs:github",
     "--js-runtimes", "node,deno",
     "--format", "bestaudio/best",
