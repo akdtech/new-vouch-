@@ -56,6 +56,8 @@ console.log(`📦 Loaded ${client.commands.size} commands.`);
 
 const music = new MusicManager(client, config);
 client.music = music;
+const spotify = new SpotifyController({ callbackUrl: process.env.SPOTIFY_REDIRECT_URI || "" });
+client.spotify = spotify;
 client.kazagumo = null;
 
 function resolveMusicPanelChannel(guildId, preferredChannelId = null) {
