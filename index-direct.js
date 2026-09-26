@@ -129,7 +129,16 @@ client.once(Events.ClientReady, async readyClient => {
     if (panelChannel) {
       console.log(`🎨 Music panel channel resolved: #${panelChannel.name} (${panelChannel.id})`);
     } else {
-      console.warn("⚠️ No writable music text channel found. The panel will be created when a music command is used in a suitable channel.");
+      console.warn("⚠️ No writable music text channel found yet; ensure247 will resolve it again.");
+    }
+
+    // The compatibility patch intentionally disables the manager's old ready
+    // listener, so startup is owned here: join the permanent VC, subscribe the
+    // audio player, create the panel, and start autoplay.
+    if (config.guildId) {
+      await music.ensure247(config.guildId);
+      music.startRecoveryLoop();
+      console.log(`♾️ 24/7 voice startup complete for guild ${config.guildId}.`);
     }
 
     console.log("🎧 Discord voice music engine active.");
