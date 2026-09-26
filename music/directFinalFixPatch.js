@@ -546,47 +546,16 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
     console.warn(`⚠️ YouTube direct playback failed; trying proxy recovery for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-700)}`);
   }
 
-  // Proxy sources are recovery routes only.
-  if (typeof getPipedStream === "function") {
-    try {
-      const piped = await getPipedStream(idOf(track));
-      sourceUrl = piped?.url || null;
-      sourceName = `piped:${piped?.base || "instance"}`;
-      if (sourceUrl) console.log(`🚀 Final core selected Piped source for ${manager.getTrackTitle(track)}`);
-    } catch (error) {
-      console.warn(`⚠️ Piped source unavailable for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-500)}`);
-    }
-  }
-
-  if (!sourceUrl) {
-    try {
-      const inv = await getInvidiousStream(idOf(track));
-      sourceUrl = inv.url;
-      sourceName = `invidious:${inv.base}`;
-      console.log(`🛟 Final core selected Invidious source for ${manager.getTrackTitle(track)}`);
-    } catch (error) {
-      console.warn(`⚠️ Invidious source unavailable for ${manager.getTrackTitle(track)}: ${clean(error?.message || error).slice(-400)}`);
-    }
-  }
-
-  if (!sourceUrl) {
-    try {
-      await startYtDlpPipe(manager, guildId, track, startMs, token, handoff);
-      return true;
-    } catch (error) {
-      console.warn(`⚠️ yt-dlp pipe failed; trying direct media URL: ${clean(error?.message || error).slice(-700)}`);
-    }
-
-    try {
-      const resolved = await resolveYouTubeUrl(track);
-      sourceUrl = resolved.url;
-      sourceHeaders = resolved.headers || "";
-    } catch (error) {
-      console.warn(`⚠️ All YouTube playback routes failed; trying exact Audius recording: ${clean(error?.message || error).slice(-700)}`);
-      const audiusStarted = await startAudiusFallback(manager, guildId, track, startMs, handoff);
-      if (audiusStarted) return true;
-      return await startSoundCloud(manager, guildId, track, startMs, token, handoff);
-    }
+  // YouTube-only mode: never silently substitute SoundCloud, Audius, or another catalog.
+  // If YouTube cannot provide the selected video, fail clearly so the user can
+  // fix authentication/PO-token access instead of hearing the wrong recording.
+  try {
+    const resolved = await resolveYouTubeUrl(track);
+    sourceUrl = resolved.url;
+    sourceHeaders = resolved.headers || "";
+    sourceName = "youtube-direct";
+  } catch (error) {
+    throw new Error(`YouTube playback unavailable for "${manager.getTrackTitle(track)}": ${clean(error?.message || error).slice(-1200)}`);
   }
   if (state.playbackToken !== token) throw new Error("playback attempt superseded");
 
@@ -607,8 +576,7 @@ async function directStart(manager, guildId, track, startMs, token, handoff) {
     first = await waitForPcm(ff, PCM_TIMEOUT);
   } catch (error) {
     kill(ff);
-    console.warn(`⚠️ Direct media URL produced no PCM; trying SoundCloud: ${clean(error?.message || error).slice(-600)}`);
-    return await startSoundCloud(manager, guildId, track, startMs, token, handoff);
+    throw new Error(`YouTube audio stream failed for "${manager.getTrackTitle(track)}": ${clean(error?.message || error).slice(-1200)}`);
   }
   if (state.playbackToken !== token) {
     kill(ff);
@@ -716,11 +684,8 @@ async function searchYt(manager, query, requester) {
       "ytsearch5:" + q
     ], 9000, "tv,web_safari");
   } catch (youtubeSearchError) {
-    console.warn(`⚠️ YouTube search blocked; trying SoundCloud search: ${clean(youtubeSearchError?.message || youtubeSearchError).slice(-500)}`);
-    const soundcloudTracks = await soundCloudSearch(q, requester);
-    if (!soundcloudTracks.length) throw youtubeSearchError;
-    console.log(`☁️ SoundCloud search success: ${soundcloudTracks[0].title}`);
-    return { type: "track", tracks: soundcloudTracks };
+    console.warn(`⚠️ YouTube search unavailable for "${q}": ${clean(youtubeSearchError?.message || youtubeSearchError).slice(-700)}`);
+    throw youtubeSearchError;
   }
 
   let data;
@@ -932,71 +897,6 @@ function install() {
       // because those frequently return compilations. Use Audius' individual
       // trending tracks when there is no artist context, and use the current
       // artist when there is one.
-      if (!clean(ctx.artist)) {
-        const trending = await audiusTrendingFallback(this.client.user);
-        const recent = new Set(Array.isArray(state.recent) ? state.recent : []);
-        const chosen = trending.find(t =>
-          t?.url &&
-          Number(t.length || 0) >= 60 * 1000 &&
-          Number(t.length || 0) <= 8 * 60 * 1000 &&
-          !recent.has(idOf(t))
-        );
-        if (chosen) {
-          chosen.isAutoplay = true;
-          chosen.autoplayGroup = "Trending music";
-          await this.startTrack(guildId, chosen, 0, { handoff: false });
-          const id = idOf(chosen);
-          state.recent = id ? [...state.recent, id].slice(-20) : state.recent;
-          state.autoplayBlockedUntil = 0;
-          state.transitioning = false;
-          state.autoplayContext = {
-            artist: clean(chosen.author),
-            title: clean(chosen.title),
-            query: clean(chosen.title),
-            words: clean(chosen.title).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
-          };
-          safeStatus(this, guildId, chosen, "Autoplay");
-          safePanel(this, guildId);
-          console.log(`🎯 FINAL AUTOPLAY: ${chosen.title} — ${chosen.author || "Unknown artist"} [Audius Trending]`);
-          return true;
-        }
-      } else {
-        try {
-          const mod = require("./directAudiusRecoveryPatch");
-          const related = typeof mod?.audiusSearch === "function"
-            ? await mod.audiusSearch(clean(ctx.artist + " similar songs"), this.client.user)
-            : [];
-          const recent = new Set(Array.isArray(state.recent) ? state.recent : []);
-          const chosen = related.find(t =>
-            t?.url &&
-            Number(t.length || 0) >= 60 * 1000 &&
-            Number(t.length || 0) <= 8 * 60 * 1000 &&
-            !recent.has(idOf(t))
-          );
-          if (chosen) {
-            chosen.isAutoplay = true;
-            chosen.autoplayGroup = `Related to ${ctx.artist}`;
-            await this.startTrack(guildId, chosen, 0, { handoff: false });
-            const id = idOf(chosen);
-            state.recent = id ? [...state.recent, id].slice(-20) : state.recent;
-            state.autoplayBlockedUntil = 0;
-            state.transitioning = false;
-            state.autoplayContext = {
-              artist: clean(chosen.author || ctx.artist),
-              title: clean(chosen.title),
-              query: clean(chosen.title),
-              words: clean(chosen.title).toLowerCase().split(/\s+/).filter(w => w.length >= 3).slice(0, 10)
-            };
-            safeStatus(this, guildId, chosen, "Autoplay");
-            safePanel(this, guildId);
-            console.log(`🎯 FINAL AUTOPLAY: ${chosen.title} — ${chosen.author || "Unknown artist"} [Related]`);
-            return true;
-          }
-        } catch (error) {
-          console.warn(`⚠️ Related Audius autoplay failed: ${clean(error?.message || error).slice(-500)}`);
-        }
-      }
-
       const seeds = [];
       if (clean(ctx.artist)) {
         seeds.push(`${ctx.artist} songs official audio`);
@@ -1109,7 +1009,7 @@ function install() {
   };
 
   if (!this?.dummy) {}
-  console.log("🧰 DEATH FINAL core v2 loaded: fast proxy search + mweb/bgutil PO playback + atomic handoff + self-healing autoplay + live panel/status.");
+  console.log("🧰 DEATH FINAL core v3 loaded: YouTube-only direct playback + authenticated PO/cookie support + no catalog substitution + self-healing autoplay.");
 }
 
 install();
