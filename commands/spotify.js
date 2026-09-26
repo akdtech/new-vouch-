@@ -11,6 +11,7 @@ module.exports = {
     .addSubcommand(s => s.setName("disconnect").setDescription("Disconnect your Spotify account from this server.")),
 
   async execute(interaction) {
+    const spotify = interaction.client.spotify;
     if (!interaction.guildId) return interaction.reply({ content: "❌ Server only.", ephemeral: true });
     const sub = interaction.options.getSubcommand();
 
