@@ -88,7 +88,7 @@ class DirectMusicManager {
     this.defaultVolume = Math.max(1, Math.min(100, Number(process.env.DEFAULT_VOLUME || config.defaultVolume || 70)));
 
     console.log("🎵 DEATH Music Engine v2: @discordjs/voice + FFmpeg + Audius/direct streams");
-    console.log("🚫 Lavalink/Kazagumo/YouTube extraction disabled.");
+    console.log("▶️ YouTube-first Discord VC playback enabled; proxy sources are recovery fallbacks.");
     console.log(`🎵 FFmpeg: ${FFMPEG}`);
 
     this.setupPlayerEvents();
