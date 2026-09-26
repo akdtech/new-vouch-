@@ -73,9 +73,10 @@ MusicManager.prototype.play=async function patchedPlay(args){
   return result;
 };
 
-MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId){
+MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId, options={}){
   const state=this.getState(guildId),player=this.players.get(guildId);
-  if(!player||!state.autoplay||state.intentionalLeave||state.autoplayBusy)return false;
+  const forceRelated=Boolean(options?.forceRelated);
+  if(!player||(!state.autoplay&&!forceRelated)||state.intentionalLeave||state.autoplayBusy)return false;
   if(state.current||state.queue.length)return false;
   if(Number(state.autoplayBlockedUntil||0)>Date.now())return false;
   state.autoplayBusy=true;
@@ -89,12 +90,14 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
 
     if(artist){
       queries.push(`${artist} songs official audio`);
-      if(contextWords.length)queries.push(`${artist} ${contextWords.slice(0,2).join(" ")} official audio`);
-      queries.push(`${artist} latest song`);
+      queries.push(`${artist} best songs official audio`);
+      if(contextWords.length)queries.push(`${artist} ${contextWords.slice(0,2).join(" ")} similar song`);
+      queries.push(`${artist} latest song official audio`);
     }
     if(contextWords.length){
       queries.push(`${contextWords.slice(0,3).join(" ")} songs official audio`);
-      if(contextQuery)queries.push(`${contextQuery} similar songs`);
+      if(contextQuery)queries.push(`${contextQuery} similar songs official audio`);
+      if(contextTitle)queries.push(`${contextTitle} related songs official audio`);
     }
     if(!queries.length){
       queries.push("popular songs 2026 official audio");
@@ -125,7 +128,7 @@ MusicManager.prototype.autoplayNext=async function contextAwareAutoplay(guildId)
     }
 
     const candidates=[...ranked.values()].sort((a,b)=>b.score-a.score).slice(0,12);
-    if(!candidates.length){
+    if(!candidates.length&&!forceRelated){
       const pipedFallback=await pipedSearch("popular songs 2026 official audio",this.client.user);
       for(const track of pipedFallback.filter(isAutoplayCandidate).filter(track=>!recent.includes(trackId(track)))){
         const id=trackId(track);if(id)ranked.set(id,{track,score:candidateScore(track,{artist,words:contextWords},recent)});
