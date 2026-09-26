@@ -1,8 +1,2 @@
 const { SlashCommandBuilder } = require("discord.js");
-module.exports = {
-  data: new SlashCommandBuilder().setName("pause").setDescription("Pause music."),
-  async execute(interaction, { music }) {
-    await music.pause(interaction.guildId);
-    return interaction.reply("⏸️ Music paused.");
-  }
-};
+module.exports={data:new SlashCommandBuilder().setName("pause").setDescription("Pause Spotify playback."),async execute(i){await i.client.spotify.pause(i.guildId,i.user.id);return i.reply("⏸️ Spotify paused.");}};
