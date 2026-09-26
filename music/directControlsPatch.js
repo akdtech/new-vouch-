@@ -70,15 +70,14 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
         Promise.resolve(this.startTrack(guildId, next, 0, { handoff: true })).catch(error => {
           state.transitioning = false;
           console.warn(`⚠️ Skip recovery failed: ${error?.message || error}`);
-          if (state.autoplay && !state.intentionalLeave) Promise.resolve(this.autoplayNext(guildId)).catch(() => {});
         });
         return;
       }
       if (state.autoplay && !state.intentionalLeave) {
         state.transitioning = true;
-        Promise.resolve(this.autoplayNext(guildId)).catch(error => {
+        Promise.resolve(this.autoplayNext(guildId, { forceRelated: true })).catch(error => {
           state.transitioning = false;
-          console.warn(`⚠️ Skip autoplay recovery failed: ${error?.message || error}`);
+          console.warn(`⚠️ Skip related-track recovery failed: ${error?.message || error}`);
         });
         return;
       }
@@ -88,8 +87,6 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
 
     state.transitioning = true;
 
-    // Prepare the replacement while the current resource remains alive.
-    // startTrack() performs an atomic Discord audio-resource handoff once real PCM exists.
     const next = state.queue.shift();
     if (next) {
       state.pendingTrack = next;
@@ -100,21 +97,32 @@ if (!MusicManager.prototype.__deathFastControlsPatched) {
         console.warn(`⚠️ Fast skip next track failed: ${error?.message || error}`);
         if (state.autoplay && !state.intentionalLeave) {
           state.transitioning = true;
-          Promise.resolve(this.autoplayNext(guildId)).catch(() => { state.transitioning = false; });
+          Promise.resolve(this.autoplayNext(guildId, { forceRelated: true })).catch(() => { state.transitioning = false; });
         }
       });
     } else if (state.autoplay && !state.intentionalLeave) {
+      // Clear the old track before asking autoplay for a replacement.
+      // Otherwise autoplayNext correctly sees an active current track and
+      // refuses to transition, which made the Skip button appear to do nothing.
+      this.destroyStream(guildId);
+      state.current = null;
+      state.audioResource = null;
+      state.pendingTrack = null;
+      state.startedAt = 0;
+      state.positionOffset = 0;
+      try { player?.stop(true); } catch {}
+
       Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
-      Promise.resolve(this.autoplayNext(guildId)).catch(error => {
+      Promise.resolve(this.autoplayNext(guildId, { forceRelated: true })).catch(error => {
         state.transitioning = false;
-        console.warn(`⚠️ Fast skip autoplay failed: ${error?.message || error}`);
+        console.warn(`⚠️ Fast skip related-track failed: ${error?.message || error}`);
       });
     } else {
       state.transitioning = false;
       Promise.resolve(this.refreshPanel(guildId)).catch(() => {});
     }
 
-    console.log(`⏭️ Instant skip requested: ${this.getTrackTitle(ended)}`);
+    console.log(`⏭️ Related skip requested: ${this.getTrackTitle(ended)}`);
   };
 
   MusicManager.prototype.stop = async function fastStop(guildId) {
