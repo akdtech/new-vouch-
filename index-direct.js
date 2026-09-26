@@ -122,6 +122,12 @@ client.once(Events.ClientReady, async readyClient => {
   }
 
   try {
+    await client.spotify.init();
+  } catch (error) {
+    console.error("Spotify init failed:", error?.message || error);
+  }
+
+  try {
     const panelChannel = resolveMusicPanelChannel(config.guildId);
     if (panelChannel) {
       console.log(`🎨 Music panel channel resolved: #${panelChannel.name} (${panelChannel.id})`);
