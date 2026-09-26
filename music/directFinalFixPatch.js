@@ -260,7 +260,7 @@ async function startYtDlpPipe(manager, guildId, track, startMs, token, handoff) 
     ...cookieArgs(),
     "--retries", "1",
     "--fragment-retries", "1",
-    "--extractor-args", "youtube:player_client=mweb;fetch_pot=always;use_ad_playback_context=false",
+    "--extractor-args", "youtube:player_client=tv,web_safari;fetch_pot=always;use_ad_playback_context=false",
     "--extractor-args", "youtubepot-wpc:browser_path=/usr/bin/chromium",
     ...(POT ? ["--extractor-args", `youtubepot-bgutilhttp:base_url=${POT}`] : []),
     "--remote-components", "ejs:github",
