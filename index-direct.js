@@ -15,6 +15,7 @@ const path = require("path");
 
 const config = require("./config/config");
 const MusicManager = require("./music/DirectMusicManager");
+// Load the unlimited related-autoplay queue after all preload patches so it owns the final autoplay transition.\nrequire("./music/directUnlimitedAutoplayPatch");
 const SpotifyController = require("./spotify/SpotifyController");
 
 console.log("🧹 DEATH Music boot: Discord Voice 24/7 mode.");
