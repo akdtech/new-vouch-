@@ -239,13 +239,13 @@ client.on(Events.InteractionCreate, async interaction => {
     try {
       switch (interaction.customId) {
         case "death_music_pause":
-          await music.pause(guildId);
+          await client.spotify.pause(guildId, interaction.user.id);
           break;
         case "death_music_resume":
-          await music.resume(guildId);
+          await client.spotify.resume(guildId, interaction.user.id);
           break;
         case "death_music_skip":
-          await music.skip(guildId);
+          await client.spotify.next(guildId, interaction.user.id);
           break;
         case "death_music_stop":
           await music.stop(guildId);
