@@ -29,7 +29,7 @@ class SpotifyController {
 
   async init() {
     if (!this.pool) return;
-    await this.pool.query(\`
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS spotify_connections (
         discord_user_id TEXT PRIMARY KEY,
         spotify_account_id TEXT NOT NULL,
@@ -44,7 +44,7 @@ class SpotifyController {
         discord_user_id TEXT NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
-    \`);
+    `);
   }
 
   authUrl(discordUserId, guildId) {
@@ -65,7 +65,7 @@ class SpotifyController {
     this.states.delete(state);
     if (!pending || pending.expiresAt < Date.now()) throw new Error("Spotify authorization expired. Run /spotify connect again.");
 
-    const response = await fetch(\`\${ACCOUNTS}/api/token\`, {
+    const response = await fetch(`${ACCOUNTS}/api/token`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -77,7 +77,7 @@ class SpotifyController {
     if (!response.ok) throw new Error(token?.error_description || token?.error || "Spotify token exchange failed.");
 
     const profile = await this.apiWithToken(token.access_token, "/me");
-    await this.pool.query(\`
+    await this.pool.query(`
       INSERT INTO spotify_connections
         (discord_user_id, spotify_account_id, spotify_user_id, display_name, refresh_token, updated_at)
       VALUES ($1,$2,$3,$4,$5,NOW())
@@ -86,7 +86,7 @@ class SpotifyController {
         spotify_user_id=EXCLUDED.spotify_user_id,
         display_name=EXCLUDED.display_name,
         refresh_token=EXCLUDED.refresh_token,
-        updated_at=NOW()\`,
+        updated_at=NOW()`,
       [pending.discordUserId, profile.account_id || profile.id, profile.id || null,
        profile.display_name || null, token.refresh_token]
     );
@@ -110,20 +110,20 @@ class SpotifyController {
 
   async getGuildController(guildId) {
     this.requireConfigured();
-    const { rows } = await this.pool.query(\`
+    const { rows } = await this.pool.query(`
       SELECT g.discord_user_id, c.display_name
       FROM spotify_guild_controllers g
       LEFT JOIN spotify_connections c ON c.discord_user_id=g.discord_user_id
-      WHERE g.guild_id=$1\`, [guildId]);
+      WHERE g.guild_id=$1`, [guildId]);
     return rows[0] || null;
   }
 
   async bindGuild(guildId, discordUserId) {
-    await this.pool.query(\`
+    await this.pool.query(`
       INSERT INTO spotify_guild_controllers (guild_id, discord_user_id, updated_at)
       VALUES ($1,$2,NOW())
       ON CONFLICT (guild_id) DO UPDATE SET
-        discord_user_id=EXCLUDED.discord_user_id, updated_at=NOW()\`,
+        discord_user_id=EXCLUDED.discord_user_id, updated_at=NOW()`,
       [guildId, discordUserId]);
   }
 
@@ -138,7 +138,7 @@ class SpotifyController {
       "SELECT refresh_token FROM spotify_connections WHERE discord_user_id=$1", [discordUserId]);
     if (!rows[0]) throw new Error("Spotify is not connected. Run /spotify connect first.");
 
-    const response = await fetch(\`\${ACCOUNTS}/api/token\`, {
+    const response = await fetch(`${ACCOUNTS}/api/token`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -157,20 +157,20 @@ class SpotifyController {
   }
 
   async apiWithToken(accessToken, path, options = {}) {
-    const response = await fetch(\`\${API}\${path}\`, {
+    const response = await fetch(`${API}${path}`, {
       ...options,
       headers: {
         accept: "application/json",
         ...(options.body ? { "content-type": "application/json" } : {}),
         ...(options.headers || {}),
-        authorization: \`Bearer \${accessToken}\`
+        authorization: `Bearer ${accessToken}`
       }
     });
     if (response.status === 204) return null;
     const text = await response.text();
     let data = null; try { data = text ? JSON.parse(text) : null; } catch {}
     if (!response.ok) {
-      const error = new Error(data?.error?.message || data?.error_description || \`Spotify API HTTP \${response.status}\`);
+      const error = new Error(data?.error?.message || data?.error_description || `Spotify API HTTP ${response.status}`);
       error.status = response.status;
       throw error;
     }
@@ -193,7 +193,7 @@ class SpotifyController {
   async search(discordUserId, query) {
     let q = String(query || "").trim();
     const match = q.match(/open\\.spotify\\.com\\/track\\/([A-Za-z0-9]+)/i);
-    if (match) q = \`track:\${match[1]}\`;
+    if (match) q = `track:${match[1]}`;
     if (!q) throw new Error("Enter a song name or Spotify track link.");
     const url = new URL("/search", API);
     url.search = new URLSearchParams({ q, type: "track", limit: "5" }).toString();
@@ -215,17 +215,17 @@ class SpotifyController {
     const controller = await this.resolveController(guildId, requesterId);
     const tracks = await this.search(controller.discord_user_id, query);
     const track = tracks[0];
-    if (!track) throw new Error(\`No Spotify track found for "\${query}".\`);
+    if (!track) throw new Error(`No Spotify track found for "${query}".`);
     const device = await this.activeDevice(controller.discord_user_id);
     if (!device) throw new Error("Open Spotify on your phone/PC first, then run /play again.");
-    await this.api(controller.discord_user_id, \`/me/player/play?device_id=\${encodeURIComponent(device.id)}\`, {
+    await this.api(controller.discord_user_id, `/me/player/play?device_id=${encodeURIComponent(device.id)}`, {
       method: "PUT", body: JSON.stringify({ uris: [track.uri] })
     });
     return {
       controller,
       track: {
         identifier: track.id, id: track.id,
-        url: track.external_urls?.spotify || \`https://open.spotify.com/track/\${track.id}\`,
+        url: track.external_urls?.spotify || `https://open.spotify.com/track/${track.id}`,
         title: track.name,
         author: (track.artists || []).map(a => a.name).join(", ") || "Unknown artist",
         length: Number(track.duration_ms || 0),
@@ -258,17 +258,17 @@ class SpotifyController {
   }
   async shuffle(guildId, requesterId, enabled = true) {
     const c = await this.resolveController(guildId, requesterId);
-    await this.api(c.discord_user_id, \`/me/player/shuffle?state=\${Boolean(enabled)}\`, { method: "PUT" }); return c;
+    await this.api(c.discord_user_id, `/me/player/shuffle?state=${Boolean(enabled)}`, { method: "PUT" }); return c;
   }
   async repeat(guildId, requesterId, state = "off") {
     const c = await this.resolveController(guildId, requesterId);
     const value = ["track","context","off"].includes(state) ? state : "off";
-    await this.api(c.discord_user_id, \`/me/player/repeat?state=\${value}\`, { method: "PUT" }); return c;
+    await this.api(c.discord_user_id, `/me/player/repeat?state=${value}`, { method: "PUT" }); return c;
   }
   async volume(guildId, requesterId, value) {
     const c = await this.resolveController(guildId, requesterId);
     const volume = Math.max(0, Math.min(100, Number(value)));
-    await this.api(c.discord_user_id, \`/me/player/volume?volume_percent=\${volume}\`, { method: "PUT" });
+    await this.api(c.discord_user_id, `/me/player/volume?volume_percent=${volume}`, { method: "PUT" });
     return { controller: c, volume };
   }
 }
