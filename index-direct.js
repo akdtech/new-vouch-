@@ -16,7 +16,7 @@ const path = require("path");
 const config = require("./config/config");
 const MusicManager = require("./music/DirectMusicManager");
 
-console.log("🧹 Clean music system boot: no Lavalink, no Kazagumo, no patch stack.");
+console.log("🧹 Clean music system boot: Spotify Connect mode.");
 
 if (!config.token || !config.clientId) {
   console.error("❌ Missing DISCORD_TOKEN or CLIENT_ID.");
