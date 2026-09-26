@@ -99,7 +99,7 @@ function toTrack(entry, requester) {
     url: `https://www.youtube.com/watch?v=${id}`,
     title: clean(entry.title),
     author: clean(entry.uploader || entry.channel || entry.creator) || "Unknown artist",
-    length: Number(entry.duration || entry.duration_string || 0) * (Number(entry.duration || 0) ? 1000 : 0),
+    length: Number(entry.duration || 0) * 1000,
     requester: requester || null,
     thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
     isAutoplay: true,
