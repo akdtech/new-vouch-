@@ -74,7 +74,7 @@ async function startInvidious(manager, guildId, originalTrack, startMs, token, h
       length: meta.length || originalTrack.length || 0, thumbnail: originalTrack.thumbnail || meta.thumbnail || null, source: "invidious" };
     const ff = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", "-nostdin", "-reconnect", "1", "-reconnect_streamed", "1",
       "-reconnect_delay_max", "3", "-user_agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36",
-      "-i", meta.url, ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []), "-vn", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"],
+      "-i", meta.url, ...(startMs > 0 ? ["-ss", String(startMs / 1000)] : []), "-vn", "-af", "aresample=48000:async=1:first_pts=0", "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"],
       { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     ff.stderr.on("data", c => { stderr += c.toString(); if (stderr.length > 4000) stderr = stderr.slice(-4000); });
