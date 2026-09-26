@@ -536,7 +536,6 @@ class DirectMusicManager {
         }
       }
       this.startRecoveryLoop();
-      }
     });
   }
 
