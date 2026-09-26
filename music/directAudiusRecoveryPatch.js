@@ -306,4 +306,34 @@ MusicManager.prototype.search = async function accurateMusicSearch(query, reques
 };
 
 
+async function audiusTrending(requester) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(AUDIUS_API + "/tracks/trending?time=week&limit=100", {
+      signal: controller.signal,
+      headers: { accept: "application/json", "user-agent": "DEATH-GMAO-Music/6.0" }
+    });
+    if (!response.ok) throw new Error("Audius trending HTTP " + response.status);
+    const json = await response.json();
+    return (Array.isArray(json?.data) ? json.data : [])
+      .filter(x => x?.id && x?.title)
+      .map(x => ({
+        identifier: String(x.id), id: String(x.id),
+        url: AUDIUS_API + "/tracks/" + encodeURIComponent(x.id) + "/stream",
+        title: clean(x.title),
+        author: clean(x.user?.name || x.user?.handle || "Unknown artist"),
+        length: Number(x.duration || 0) * 1000,
+        genre: x.genre || null,
+        requester: requester || null,
+        thumbnail: x.artwork?.["480x480"] || x.artwork?.["150x150"] || null,
+        source: "audius"
+      }))
+      .filter(t => Number(t.length || 0) >= 60 * 1000 && Number(t.length || 0) <= 8 * 60 * 1000)
+      .filter(t => !badTitle.test(t.title));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 module.exports = { playAudius, audiusSearch, audiusTrending };
